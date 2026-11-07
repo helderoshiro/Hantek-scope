@@ -27,9 +27,21 @@ Regras:
 
 ## Hipóteses a validar com o aparelho real
 
-- As taxas de amostragem em `simulator.py` e a faixa de ±5 V são suposições.
-- Volts por divisão só afeta a exibição por enquanto. No aparelho real, também
-  deverá selecionar o ganho de entrada.
+O backend `hantek6022.py` só foi testado com um `Oscilloscope` falso. Conferir:
+
+- Uso da PyHT6022 no Windows 11 e o fluxo do Zadig nos dois IDs USB.
+- Limite de 24 MS/s com dois canais: vem da banda do USB 2.0, sem medição. Procurar
+  amostras perdidas nas taxas altas.
+- Primeiras amostras de cada leitura e após trocar ganho: podem precisar de descarte.
+- Calibração da EEPROM: uma EEPROM em branco geraria offsets errados.
+- Sentido da chave do aparelho (osciloscópio/analisador lógico).
+
+## Cuidados com o aparelho e a biblioteca
+
+- Nunca escrever na EEPROM (`set_calibration_values`, `write_eeprom`).
+- Não usar `Oscilloscope.flash_firmware()`: ele espera sem limite pelo aparelho.
+- `QTest.qWait` longo não libera o GIL para a thread de aquisição; para medir
+  desempenho, usar `app.exec()` com `QTimer`.
 
 ## Convenções
 

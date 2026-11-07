@@ -1,5 +1,6 @@
 import time
 from collections import deque
+from collections.abc import Sequence
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -20,11 +21,10 @@ from PySide6.QtWidgets import (
 
 import pyqtgraph as pg
 
-from hantek_scope.acquisition.base import Frame, ScopeBackend
-from hantek_scope.timebase import HORIZONTAL_DIVS, TIME_PER_DIV, capture_for
+from hantek_scope.acquisition.base import CaptureConfig, Frame, ScopeBackend
+from hantek_scope.timebase import HORIZONTAL_DIVS, TIME_PER_DIV, VERTICAL_DIVS, capture_for
 from hantek_scope.ui.worker import AcquisitionWorker
 
-VERTICAL_DIVS = 8
 CHANNEL_COLORS = ("#f2c94c", "#56ccf2", "#6fcf97", "#eb5757")
 VOLTS_PER_DIV = (0.05, 0.1, 0.2, 0.5, 1.0, 2.0, 5.0)
 DEFAULT_VOLTS_PER_DIV = 1.0
@@ -59,20 +59,25 @@ class ChannelControls(QGroupBox):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, backend: ScopeBackend) -> None:
+    def __init__(
+        self,
+        backends: Sequence[ScopeBackend],
+        initial: ScopeBackend | None = None,
+    ) -> None:
+        """Todos os backends devem ter o mesmo número de canais."""
         super().__init__()
-        self._backend = backend
+        self._backends = backends
+        self._backend = initial if initial is not None else backends[0]
         self._worker: AcquisitionWorker | None = None
         self._last_frame: Frame | None = None
         self._frame_times: deque[float] = deque(maxlen=30)
 
-        self.setWindowTitle(f"Hantek Scope ({backend.name})")
         self.resize(1100, 680)
 
         self._plot = self._build_plot()
         self._curves = [
             self._plot.plot(pen=pg.mkPen(CHANNEL_COLORS[i], width=1), skipFiniteCheck=True)
-            for i in range(backend.n_channels)
+            for i in range(self._backend.n_channels)
         ]
         for curve in self._curves:
             # Mantém a fluidez nas capturas longas sem perder os picos do sinal.
@@ -85,10 +90,11 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._build_side_panel())
         self.setCentralWidget(central)
 
-        self._source_label = QLabel(f"Fonte: {backend.name}")
+        self._source_label = QLabel()
         self._scale_label = QLabel()
         self.statusBar().addWidget(self._source_label)
         self.statusBar().addWidget(self._scale_label)
+        self._update_source_labels()
         self._update_scale_label()
 
     def _build_plot(self) -> pg.PlotWidget:
@@ -113,6 +119,15 @@ class MainWindow(QMainWindow):
         return plot
 
     def _build_side_panel(self) -> QWidget:
+        self._source = QComboBox()
+        for backend in self._backends:
+            self._source.addItem(backend.name, backend)
+        self._source.setCurrentIndex(self._backends.index(self._backend))
+        self._source.currentIndexChanged.connect(self._on_source_changed)
+
+        source = QGroupBox("Fonte")
+        QVBoxLayout(source).addWidget(self._source)
+
         self._run_button = QPushButton("Executar")
         self._run_button.setCheckable(True)
         self._run_button.setMinimumHeight(40)
@@ -122,19 +137,20 @@ class MainWindow(QMainWindow):
         for seconds in TIME_PER_DIV:
             self._time_per_div.addItem(format_si(seconds, "s"), seconds)
         self._time_per_div.setCurrentIndex(TIME_PER_DIV.index(DEFAULT_TIME_PER_DIV))
-        self._time_per_div.currentIndexChanged.connect(self._on_timebase_changed)
+        self._time_per_div.currentIndexChanged.connect(self._on_settings_changed)
 
         timebase = QGroupBox("Horizontal")
         QFormLayout(timebase).addRow("Tempo/div", self._time_per_div)
 
         self._channels = [
-            ChannelControls(i, CHANNEL_COLORS[i], self._on_display_changed)
+            ChannelControls(i, CHANNEL_COLORS[i], self._on_settings_changed)
             for i in range(self._backend.n_channels)
         ]
 
         panel = QWidget()
         panel.setFixedWidth(220)
         layout = QVBoxLayout(panel)
+        layout.addWidget(source)
         layout.addWidget(self._run_button)
         layout.addWidget(timebase)
         for channel in self._channels:
@@ -152,8 +168,29 @@ class MainWindow(QMainWindow):
         self.stop()
         super().closeEvent(event)
 
-    def _current_config(self):
-        return capture_for(self._time_per_div.currentData(), self._backend.sample_rates)
+    def _current_config(self) -> CaptureConfig:
+        return capture_for(
+            self._time_per_div.currentData(),
+            self._backend.sample_rates,
+            tuple(c.volts_per_div.currentData() for c in self._channels),
+        )
+
+    def _on_source_changed(self) -> None:
+        was_running = self._run_button.isChecked()
+        self.stop()
+        self._backend = self._source.currentData()
+        # O traço antigo não pode continuar na tela identificado como da nova fonte.
+        self._last_frame = None
+        for curve in self._curves:
+            curve.setData([], [])
+        self._update_source_labels()
+        self._update_scale_label()
+        if was_running:
+            self.start()
+
+    def _update_source_labels(self) -> None:
+        self.setWindowTitle(f"Hantek Scope ({self._backend.name})")
+        self._source_label.setText(f"Fonte: {self._backend.name}")
 
     def _on_run_toggled(self, running: bool) -> None:
         self._run_button.setText("Parar" if running else "Executar")
@@ -169,12 +206,9 @@ class MainWindow(QMainWindow):
             self._worker = None
         self._update_scale_label()
 
-    def _on_timebase_changed(self) -> None:
+    def _on_settings_changed(self) -> None:
         if self._worker is not None:
             self._worker.set_config(self._current_config())
-        self._on_display_changed()
-
-    def _on_display_changed(self) -> None:
         self._redraw()
         self._update_scale_label()
 

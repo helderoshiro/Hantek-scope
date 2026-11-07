@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,8 +7,11 @@ name = "hantek-scope"
 version = "0.1.0.dev0"
 description = "Interface amigável e fluida para o osciloscópio USB Hantek 6022BL"
 readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 requires-python = ">=3.12"
 dependencies = [
+    "hantek6022api @ https://github.com/Ho-Ro/Hantek6022API/archive/refs/tags/2.10.9.zip",
     "numpy>=1.26",
     "PySide6>=6.7",
     "pyqtgraph>=0.13.7",

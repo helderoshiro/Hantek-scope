@@ -11,3 +11,11 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 - Aquisição em thread separada, sempre exibindo o quadro mais recente.
 - Interface com Executar/Parar, tempo por divisão e, por canal, ativação e
   volts por divisão.
+- Suporte ao Hantek 6022BL via PyHT6022, com envio de firmware e calibração da
+  EEPROM. Ainda não testado com o aparelho real.
+- Seleção de fonte na interface, abrindo no simulador se não houver aparelho.
+- Licença GPL-3.0.
+
+### Alterado
+
+- Volts por divisão agora seleciona a faixa de entrada do aparelho.

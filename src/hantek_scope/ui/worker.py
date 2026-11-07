@@ -1,8 +1,11 @@
 import threading
+import time
 
 from PySide6.QtCore import QThread, Signal
 
 from hantek_scope.acquisition.base import CaptureConfig, Frame, ScopeBackend
+
+MIN_FRAME_INTERVAL_S = 1 / 30
 
 
 class AcquisitionWorker(QThread):
@@ -44,6 +47,7 @@ class AcquisitionWorker(QThread):
     def _acquire_until_interrupted(self) -> None:
         applied = None
         while not self.isInterruptionRequested():
+            started = time.monotonic()
             with self._lock:
                 config = self._config
             if config != applied:
@@ -55,3 +59,6 @@ class AcquisitionWorker(QThread):
                 self._latest = frame
             if not already_notified:
                 self.frame_ready.emit()
+            remaining = MIN_FRAME_INTERVAL_S - (time.monotonic() - started)
+            if remaining > 0:
+                time.sleep(remaining)

@@ -4,10 +4,15 @@ from typing import Protocol
 import numpy as np
 
 
+class ScopeError(Exception):
+    """Falha de aquisição, com mensagem própria para mostrar ao usuário."""
+
+
 @dataclass(frozen=True)
 class CaptureConfig:
     sample_rate: float
     n_samples: int
+    volts_per_div: tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)

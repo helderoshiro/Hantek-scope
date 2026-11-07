@@ -4,6 +4,7 @@ from collections.abc import Iterable
 from hantek_scope.acquisition.base import CaptureConfig
 
 HORIZONTAL_DIVS = 10
+VERTICAL_DIVS = 8
 MAX_SAMPLES = 100_000
 TIME_PER_DIV = (
     1e-6, 2e-6, 5e-6,
@@ -14,7 +15,11 @@ TIME_PER_DIV = (
 )  # fmt: skip
 
 
-def capture_for(time_per_div: float, sample_rates: Iterable[float]) -> CaptureConfig:
+def capture_for(
+    time_per_div: float,
+    sample_rates: Iterable[float],
+    volts_per_div: tuple[float, ...] = (),
+) -> CaptureConfig:
     """Usa a maior taxa cuja janela completa cabe em MAX_SAMPLES."""
     window_s = HORIZONTAL_DIVS * time_per_div
     rates = sorted(sample_rates)
@@ -22,4 +27,4 @@ def capture_for(time_per_div: float, sample_rates: Iterable[float]) -> CaptureCo
     rate = fitting[-1] if fitting else rates[0]
     # A amostra extra faz o traço alcançar a borda direita da tela.
     n_samples = math.ceil(round(rate * window_s, 6)) + 1
-    return CaptureConfig(sample_rate=rate, n_samples=n_samples)
+    return CaptureConfig(sample_rate=rate, n_samples=n_samples, volts_per_div=volts_per_div)

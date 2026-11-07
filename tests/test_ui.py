@@ -30,7 +30,7 @@ def test_format_si(value, unit, expected):
 
 
 def test_window_draws_frames_and_stops(qapp):
-    window = MainWindow(SimulatedScope(seed=1))
+    window = MainWindow([SimulatedScope(seed=1)])
     window.start()
     try:
         assert wait_until(lambda: window._curves[0].xData is not None)
@@ -43,7 +43,7 @@ def test_window_draws_frames_and_stops(qapp):
 
 
 def test_volts_per_div_rescales_the_stopped_trace(qapp):
-    window = MainWindow(SimulatedScope(seed=1))
+    window = MainWindow([SimulatedScope(seed=1)])
     window.start()
     assert wait_until(lambda: window._curves[0].yData is not None)
     window.stop()
@@ -56,7 +56,7 @@ def test_volts_per_div_rescales_the_stopped_trace(qapp):
 
 
 def test_disabled_channel_is_hidden(qapp):
-    window = MainWindow(SimulatedScope(seed=1))
+    window = MainWindow([SimulatedScope(seed=1)])
     window.start()
     assert wait_until(lambda: window._curves[1].yData is not None)
     window.stop()
@@ -88,3 +88,27 @@ def test_worker_keeps_only_the_latest_frame(qapp):
         worker.wait()
     assert worker.take_frame() is not None
     assert worker.take_frame() is None
+
+
+def test_changing_source_clears_the_old_trace(qapp):
+    first = SimulatedScope(seed=1)
+    second = SimulatedScope(seed=2)
+    second.name = "Outra fonte"
+    window = MainWindow([first, second])
+    window.start()
+    assert wait_until(lambda: window._curves[0].yData is not None)
+    window.stop()
+
+    window._source.setCurrentIndex(1)
+
+    assert window._last_frame is None
+    assert window._curves[0].yData is None
+    assert "Outra fonte" in window.windowTitle()
+    assert not window._run_button.isChecked()
+
+
+def test_volts_per_div_reaches_the_capture_config(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    combo = window._channels[1].volts_per_div
+    combo.setCurrentIndex(combo.findData(0.1))
+    assert window._current_config().volts_per_div == (1.0, 0.1)

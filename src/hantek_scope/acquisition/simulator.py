@@ -9,7 +9,6 @@ from hantek_scope.acquisition.base import CaptureConfig, Frame
 SAMPLE_RATES = (1e6, 4e6, 8e6, 16e6, 24e6, 48e6)
 FULL_SCALE_V = 5.0
 ADC_LEVELS = 256
-MIN_FRAME_INTERVAL_S = 1 / 30
 
 
 @dataclass(frozen=True)
@@ -71,8 +70,7 @@ class SimulatedScope:
         return Frame(sample_rate=rate, channels=channels)
 
     def _wait_for_capture(self, capture_s: float) -> None:
-        interval = max(capture_s, MIN_FRAME_INTERVAL_S)
-        remaining = interval - (time.monotonic() - self._last_read)
+        remaining = capture_s - (time.monotonic() - self._last_read)
         if remaining > 0:
             time.sleep(remaining)
         self._last_read = time.monotonic()
