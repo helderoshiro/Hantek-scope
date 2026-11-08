@@ -12,7 +12,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 - Interface com Executar/Parar, tempo por divisão e, por canal, ativação e
   volts por divisão.
 - Suporte ao Hantek 6022BL via PyHT6022, com envio de firmware e calibração da
-  EEPROM. Ainda não testado com o aparelho real.
+  EEPROM, testado com o aparelho real no Windows 11. Taxa máxima de 8 MS/s com
+  dois canais, a maior sem perda de amostras nas medições.
 - Seleção de fonte na interface, abrindo no simulador se não houver aparelho.
 - Licença GPL-3.0.
 

@@ -2,8 +2,8 @@
 
 Interface amigável e fluida para o osciloscópio USB Hantek 6022BL.
 
-> **Estado atual:** o simulador funciona. O suporte ao 6022BL está implementado,
-> mas **ainda não foi testado com o aparelho real**.
+> **Estado atual:** funciona com o 6022BL real no Windows 11 e com o simulador.
+> Com os dois canais, a taxa máxima é 8 MS/s.
 
 ## Como rodar
 
@@ -20,17 +20,28 @@ simulador. A fonte em uso aparece no painel lateral e na barra de status.
 
 ## Driver do 6022BL no Windows
 
-O aparelho precisa do driver WinUSB, instalado com o [Zadig](https://zadig.akeo.ie/).
-Ele aparece com dois IDs USB, e cada um precisa do driver:
+Coloque a chave do aparelho em **H** (osciloscópio). Na posição P, ele pode se
+identificar como analisador lógico Saleae (`0925:3881`).
+
+O programa precisa do driver WinUSB, instalado com o [Zadig](https://zadig.akeo.ie/).
+O aparelho aparece no Windows em etapas, e cada uma é um dispositivo diferente:
+
+| Nome no Zadig | ID USB | Firmware em uso |
+|---|---|---|
+| `Hantek6022BL` | `04B4:602A` | nenhum (se não houver driver da Hantek) |
+| `Hantek6022BL` | `04B5:602A` | original da Hantek, carregado pelo driver dela |
+| `DSO-6022BL` | `04B5:602A` | aberto, carregado por este programa |
 
 1. Conecte o aparelho, abra o Zadig e ative **Options > List All Devices**.
-2. Selecione o dispositivo `04B4:602A`, escolha **WinUSB** e clique em instalar.
-3. Abra este programa e clique em **Executar**. Ele envia o firmware para a RAM do
-   aparelho, que reaparece como `04B5:602A`. É normal surgir um erro de acesso aqui.
-4. Repita o passo 2 para `04B5:602A` e clique em **Executar** de novo.
+2. Selecione `Hantek6022BL`, escolha **WinUSB** e clique em **Replace Driver**.
+3. Abra este programa e clique em **Executar**. Ele envia o firmware aberto, e o
+   aparelho reaparece como `DSO-6022BL`. É normal surgir um erro de acesso aqui.
+4. Sem desconectar o cabo, repita o passo 2 para `DSO-6022BL` e clique em
+   **Executar** de novo.
 
-O firmware não é gravado de forma permanente: ele é enviado a cada vez que o
-aparelho é ligado.
+A troca é feita uma vez só. O firmware não é gravado no aparelho: ele vai para a
+RAM e é enviado de novo sempre que o aparelho é ligado. Enquanto o WinUSB estiver
+instalado, o programa original da Hantek não funciona com o aparelho.
 
 ## Testes
 
@@ -40,7 +51,7 @@ aparelho é ligado.
 
 ## Roteiro
 
-- Validar o suporte ao 6022BL com o aparelho real
+- Taxas maiores com um canal só e tempos por divisão mais lentos
 - Trigger, cursores e medições
 - FFT, Lissajous (XY), filtros e operações entre canais
 - Exportação de dados

@@ -27,14 +27,21 @@ Regras:
 
 ## Hipóteses a validar com o aparelho real
 
-O backend `hantek6022.py` só foi testado com um `Oscilloscope` falso. Conferir:
+Validado com o 6022BL real (Windows 11, firmware 0x0210, 2026-11-08):
 
-- Uso da PyHT6022 no Windows 11 e o fluxo do Zadig nos dois IDs USB.
-- Limite de 24 MS/s com dois canais: vem da banda do USB 2.0, sem medição. Procurar
-  amostras perdidas nas taxas altas.
-- Primeiras amostras de cada leitura e após trocar ganho: podem precisar de descarte.
-- Calibração da EEPROM: uma EEPROM em branco geraria offsets errados.
-- Sentido da chave do aparelho (osciloscópio/analisador lógico).
+- Captura correta do sinal de calibração (1 kHz, 0 a 2 V) e calibração da EEPROM.
+- Dois canais sem perda de amostras até 8 MS/s. De 10 a 16 MS/s a perda varia
+  entre execuções; a partir de 24 MS/s sempre há perda, a partir de ~6.000 amostras.
+- O início das leituras não mostrou amostras ruins.
+- Com o firmware aberto, o aparelho vira outra instância USB (`DSO-6022BL`, com
+  número de série) e precisa de WinUSB próprio. O driver da Hantek, se instalado,
+  ainda carrega o firmware original a cada conexão.
+
+Ainda não verificado: acomodação após trocar o ganho e taxas acima de 8 MS/s com
+um canal só.
+
+Para medir perdas, usar o sinal de calibração no CH2 e conferir se todos os
+períodos têm 1 ms.
 
 ## Cuidados com o aparelho e a biblioteca
 

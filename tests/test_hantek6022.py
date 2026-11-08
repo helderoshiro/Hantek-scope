@@ -105,7 +105,7 @@ def test_range_covers_the_screen_height(volts_per_div, index):
 
 
 def test_sample_rates_stay_within_usb_bandwidth():
-    assert max(Hantek6022Backend.sample_rates) == 24e6
+    assert max(Hantek6022Backend.sample_rates) == 8e6
     assert min(Hantek6022Backend.sample_rates) == 20e3
 
 
@@ -183,7 +183,7 @@ def test_read_requests_whole_usb_packets():
     scope = FakeScope()
     backend = backend_with(scope)
     backend.open()
-    backend.configure(CaptureConfig(24e6, 241, (1.0, 1.0)))
+    backend.configure(CaptureConfig(8e6, 241, (1.0, 1.0)))
     backend.read_frame()
     # 241 amostras em 2 canais são 482 bytes, arredondados para 1 pacote de 512.
     assert scope.read_sizes == [256]

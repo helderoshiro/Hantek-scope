@@ -10,8 +10,9 @@ from PyHT6022.LibUsbScope import Oscilloscope
 from hantek_scope.acquisition.base import CaptureConfig, Frame, ScopeError
 from hantek_scope.timebase import VERTICAL_DIVS
 
-# Dois canais a 30 MS/s ou mais exigem 60 MB/s, acima do limite do USB 2.0.
-MAX_TWO_CHANNEL_RATE = 24e6
+# Medido no 6022BL com dois canais: sem perdas até 8 MS/s; de 10 a 16 MS/s a
+# perda varia com a carga do PC; a partir de 24 MS/s sempre há amostras perdidas.
+MAX_TWO_CHANNEL_RATE = 8e6
 RATE_INDEX = {
     rate: index
     for index, (_, rate) in Oscilloscope.SAMPLE_RATES.items()
