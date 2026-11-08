@@ -128,7 +128,7 @@ def test_range_covers_the_screen_height(volts_per_div, index):
 
 
 def test_sample_rates_stay_within_usb_bandwidth():
-    assert max(Hantek6022Backend.sample_rates) == 8e6
+    assert max(Hantek6022Backend.sample_rates) == 16e6
     assert min(Hantek6022Backend.sample_rates) == 20e3
     assert max(Hantek6022Backend.single_channel_rates) == hantek6022.MAX_ONE_CHANNEL_RATE
 
@@ -199,6 +199,7 @@ def test_read_frame_trims_to_requested_samples_and_converts_to_volts():
     frame = backend.read_frame()
 
     assert frame.channels.shape == (2, 300)
+    assert scope.read_sizes == [1536]  # 300 + 1024 descartadas, em pacotes inteiros.
     # (153 - 128) contagens, com 5,12 V / 128 por contagem e ganho padrão de 1,01.
     np.testing.assert_allclose(frame.channels, 25 * 5.12 * 1.01 / 128)
 
@@ -209,8 +210,8 @@ def test_read_requests_whole_usb_packets():
     backend.open()
     backend.configure(CaptureConfig(8e6, 241, (1.0, 1.0)))
     backend.read_frame()
-    # 241 amostras em 2 canais são 482 bytes, arredondados para 1 pacote de 512.
-    assert scope.read_sizes == [256]
+    # 241 amostras mais as 1024 do FIFO, em 2 canais: 2530 bytes, ou 5 pacotes de 512.
+    assert scope.read_sizes == [1280]
 
 
 def test_usb_failure_during_read_becomes_scope_error():
@@ -233,14 +234,14 @@ def test_single_channel_reads_only_ch1():
     scope = FakeScope(adc=153)
     backend = backend_with(scope)
     backend.open()
-    backend.configure(CaptureConfig(16e6, 300, (1.0, 1.0), channels=1))
+    backend.configure(CaptureConfig(30e6, 300, (1.0, 1.0), channels=1))
     assert ("channels", 1) in scope.calls
     frame = backend.read_frame()
     assert frame.channels.shape == (2, 300)
     np.testing.assert_allclose(frame.channels[0], 25 * 5.12 * 1.01 / 128)
     assert not frame.channels[1].any()
-    # 300 amostras de um canal são 300 bytes: um pacote de 512.
-    assert scope.read_sizes == [512]
+    # Com um canal, o FIFO velho são 2048 amostras: 2348 bytes, ou 5 pacotes de 512.
+    assert scope.read_sizes == [2560]
 
 
 def test_stream_keeps_capturing_and_loses_no_bytes_between_frames():
@@ -255,9 +256,10 @@ def test_stream_keeps_capturing_and_loses_no_bytes_between_frames():
     for _ in range(3):
         backend.read_frame()
     assert scope.calls == ["start"]  # Liga uma vez e não desliga entre quadros.
-    # Bytes intercalados CH1, CH2: o CH1 recebe os pares, sem pular nenhum.
+    # Bytes intercalados CH1, CH2: depois dos 2048 bytes velhos do FIFO, o CH1
+    # recebe os pares, sem pular nenhum entre um quadro e o seguinte.
     ch1 = np.concatenate([adc[0], adc[2], adc[4]])
-    assert np.array_equal(ch1, np.arange(0, 1800, 2) % 256)
+    assert np.array_equal(ch1, np.arange(2048, 2048 + 1800, 2) % 256)
     # Cada leitura pede pacotes inteiros; a sobra fica para a próxima.
     assert all(size % 512 == 0 for size in scope.device_handle.bulk_sizes)
 
@@ -275,3 +277,18 @@ def test_stream_stops_when_the_rate_changes_and_on_close():
     backend.read_frame()
     backend.close()
     assert scope.calls.count("stop") == 2
+
+
+def test_triggered_read_drops_the_stale_fifo_bytes():
+    scope = FakeScope()
+    # Primeiras 1024 amostras velhas (ADC 0), depois as da captura (ADC 200).
+    scope.read_data = lambda size, raw=False, timeout=0: (
+        bytes([0]) * 1024 + bytes([200]) * (size - 1024),
+        bytes([0]) * 1024 + bytes([200]) * (size - 1024),
+    )
+    backend = backend_with(scope)
+    backend.open()
+    backend.configure(CaptureConfig(1e6, 500, (1.0, 1.0)))
+    frame = backend.read_frame()
+    assert frame.channels.shape == (2, 500)
+    assert np.all(frame.channels > 0)

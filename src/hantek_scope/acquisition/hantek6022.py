@@ -10,11 +10,13 @@ from PyHT6022.LibUsbScope import Oscilloscope
 from hantek_scope.acquisition.base import CaptureConfig, Frame, ScopeError
 from hantek_scope.timebase import VERTICAL_DIVS
 
-# Medido no 6022BL com dois canais: sem perdas até 8 MS/s; de 10 a 16 MS/s a
-# perda varia com a carga do PC; a partir de 24 MS/s sempre há amostras perdidas.
-MAX_TWO_CHANNEL_RATE = 8e6
-# Com um canal só, o USB leva metade dos bytes por amostra.
-MAX_ONE_CHANNEL_RATE = 16e6
+# Medido no 6022BL com dois canais, já descartando o FIFO velho: de 4 a 16 MS/s,
+# 2% a 3% das capturas perdem um trecho no meio, sem diferença entre as taxas;
+# a 24 MS/s (48 MB/s no USB) sempre há perda.
+MAX_TWO_CHANNEL_RATE = 16e6
+# Com um canal, cada amostra é um byte: 30 MS/s são 30 MB/s, abaixo dos 32 MB/s
+# dos dois canais a 16 MS/s. Não medido com sinal no CH1.
+MAX_ONE_CHANNEL_RATE = 30e6
 RATE_INDEX = {
     rate: index
     for index, (_, rate) in Oscilloscope.SAMPLE_RATES.items()
@@ -22,6 +24,10 @@ RATE_INDEX = {
 }
 USB_PACKET_BYTES = 512
 BULK_ENDPOINT = 0x86
+# O FIFO do aparelho guarda 2048 bytes da captura anterior, que chegam no começo
+# de cada leitura: medido no 6022BL, o salto no sinal fica na amostra 1024 (dois
+# canais). Esse trecho é lido e descartado.
+STALE_FIFO_BYTES = 2048
 CONTROL_TIMEOUT_MS = 1000
 READ_MARGIN_MS = 1000
 REENUMERATION_TIMEOUT_S = 10.0
@@ -150,7 +156,9 @@ class Hantek6022Backend:
             if self._config.stream:
                 raw = self._read_stream(scope, n, n_channels, timeout_ms)
             else:
-                raw = scope.read_data(_samples_in_whole_packets(n, n_channels), raw=True, timeout=timeout_ms)
+                stale = STALE_FIFO_BYTES // n_channels
+                size = _samples_in_whole_packets(n + stale, n_channels)
+                raw = [data[stale:] for data in scope.read_data(size, raw=True, timeout=timeout_ms)]
         except usb1.USBError as exc:
             raise ScopeError(MSG_COMMUNICATION.format(error=exc)) from exc
         channels = np.zeros((self.n_channels, n))
@@ -170,9 +178,15 @@ class Hantek6022Backend:
         pacote USB que passam de n ficam para o próximo quadro.
         """
         if not self._streaming:
-            self._stream_buffer.clear()
             scope.start_capture(timeout=CONTROL_TIMEOUT_MS)
             self._streaming = True
+            # Os bytes velhos do FIFO vêm primeiro; ficam no buffer e saem abaixo.
+            self._stream_buffer = bytearray()
+            while len(self._stream_buffer) < STALE_FIFO_BYTES:
+                self._stream_buffer += scope.device_handle.bulkRead(
+                    BULK_ENDPOINT, STALE_FIFO_BYTES, timeout=timeout_ms
+                )
+            del self._stream_buffer[:STALE_FIFO_BYTES]
         needed = n * n_channels
         while len(self._stream_buffer) < needed:
             missing = needed - len(self._stream_buffer)

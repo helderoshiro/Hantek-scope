@@ -3,7 +3,7 @@
 Interface amigável e fluida para o osciloscópio USB Hantek 6022BL.
 
 > **Estado atual:** funciona com o 6022BL real no Windows 11 e com o simulador.
-> Com os dois canais, a taxa máxima é 8 MS/s; só com o CH1, 16 MS/s.
+> Com os dois canais, a taxa máxima é 16 MS/s; só com o CH1, 30 MS/s.
 
 ## Como rodar
 
@@ -51,7 +51,7 @@ volta ao início.
   o traço corre da direita para a esquerda, sem trigger, com o aparelho
   capturando sem parar. O eixo mostra o tempo até a amostra mais recente.
 - **Um canal:** com o CH2 desligado, sem MATH, sem modo XY e com o trigger no
-  CH1, só o CH1 é amostrado, e a taxa pode ir a 16 MS/s. A barra de status
+  CH1, só o CH1 é amostrado, e a taxa pode ir a 30 MS/s. A barra de status
   indica "(só CH1)".
 
 As medições automáticas aparecem embaixo do gráfico e usam só a parte visível

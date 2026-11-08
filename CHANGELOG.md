@@ -11,7 +11,7 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
   ficar fora da tela, indicado por uma seta, e "Disparo ao centro" o traz de volta.
 - Tempos de 20 ms a 10 s/div; a partir de 100 ms/div, modo roll com captura
   contínua, sem lacunas entre as leituras.
-- Taxas de até 16 MS/s quando só o CH1 é necessário.
+- Taxas de até 30 MS/s quando só o CH1 é necessário.
 - FFT do trecho visível, com janelas Hann, flat top, Blackman-Harris e
   retangular, escala em dB ou linear e eixo de frequência linear ou log.
 - Modo XY (CH2 contra CH1).
@@ -23,6 +23,16 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 ### Alterado
 
 - A imagem salva inclui a FFT, quando ela está aberta.
+- Taxa máxima com dois canais passa de 8 para 16 MS/s.
+- A média deixa de fora capturas muito diferentes dela, que deixavam degraus
+  nas bordas, e recomeça se o sinal mudar de verdade.
+- O painel lateral tem a largura do conteúdo e não corta mais os textos.
+
+### Corrigido
+
+- O começo de cada captura trazia 2048 bytes da captura anterior, guardados no
+  FIFO do aparelho, o que deslocava as bordas em boa parte das capturas
+  (parecia perda de amostras). Esse trecho agora é descartado.
 
 ## [0.4.0] - 2026-11-08
 

@@ -25,16 +25,24 @@ def _overlay(parent) -> QLabel:
     return label
 
 
+class FrequencyAxis(pg.AxisItem):
+    """Marcas como "100 Hz" e "1 kHz", também no eixo log (onde o valor é log10)."""
+
+    def tickStrings(self, values, scale, spacing):
+        if self.logMode:
+            return [format_si(10**v, "Hz") for v in values]
+        return [format_si(v, "Hz") for v in values]
+
+
 class SpectrumPlot(pg.PlotWidget):
     """Espectro com zoom e arrasto livres do pyqtgraph nos dois eixos."""
 
     def __init__(self) -> None:
-        super().__init__(background=BACKGROUND)
+        super().__init__(background=BACKGROUND, axisItems={"bottom": FrequencyAxis("bottom")})
         self.setMenuEnabled(False)
         self.hideButtons()
         self.showGrid(x=True, y=True, alpha=0.25)
-        self.setLabel("bottom", "Frequência", units="Hz")
-        self.getAxis("bottom").enableAutoSIPrefix(True)
+        self.setLabel("bottom", "Frequência")
         self._curve = self.plot(skipFiniteCheck=True)
         self._curve.setDownsampling(auto=True, method="peak")
         self._curve.setClipToView(True)

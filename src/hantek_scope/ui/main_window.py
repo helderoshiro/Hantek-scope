@@ -84,6 +84,14 @@ FFT_WINDOWS = (
 )
 MIN_FFT_SAMPLES = 16
 AVERAGE_COUNTS = (1, 2, 4, 8, 16, 32, 64, 128)
+# Uma captura que difere da média em mais de uma divisão em mais de 0,2% dos
+# pontos (perda de amostras no USB, disparo em outra borda) fica fora dela; o
+# ruído comum fica bem abaixo de uma divisão.
+# Depois de 3 seguidas, o sinal mudou de verdade e a média recomeça.
+AVERAGE_OUTLIER_DIVS = 1.0
+AVERAGE_OUTLIER_FRACTION = 0.002
+AVERAGE_MAX_REJECTS = 3
+SIDE_PANEL_MIN_WIDTH = 250
 # Autoset: altura do sinal na tela, folga da faixa de entrada e quadros descartados
 # depois de cada mudança (podem ter sido lidos com a configuração anterior).
 AUTOSET_SCREEN_DIVS = 6
@@ -283,6 +291,7 @@ class MainWindow(QMainWindow):
         self._average: list[np.ndarray] | None = None
         self._average_trigger = 0.0
         self._average_count = 0
+        self._average_rejects = 0
         # Autoset em andamento: etapa (1 = procurando, 2 = refinando) e quadros a pular.
         self._autoset_stage = 0
         self._autoset_skip = 0
@@ -411,7 +420,10 @@ class MainWindow(QMainWindow):
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setFixedWidth(250)
+        # A largura sai do conteúdo mais a barra de rolagem vertical, que de outro
+        # modo ocupa parte do painel e corta os textos à direita.
+        scrollbar = scroll.verticalScrollBar().sizeHint().width()
+        scroll.setFixedWidth(max(SIDE_PANEL_MIN_WIDTH, panel.minimumSizeHint().width() + scrollbar))
         return scroll
 
     def _build_math_group(self) -> QGroupBox:
@@ -780,23 +792,43 @@ class MainWindow(QMainWindow):
         """Soma a captura à média, deslocada para o disparo cair no mesmo lugar.
 
         Até juntar N capturas é a média simples; depois, cada nova pesa 1/N e
-        as antigas vão saindo aos poucos (média exponencial).
+        as antigas vão saindo aos poucos (média exponencial). Uma captura muito
+        diferente da média não entra, para não deixar degraus nas bordas.
         """
         limit = self._average_n.currentData()
         if self._average is None or self._average[0].shape != traces[0].shape:
-            self._average = [trace.copy() for trace in traces]
-            self._average_trigger = trigger_at
-            self._average_count = 1
+            self._restart_average(traces, trigger_at)
         else:
             shift = round(trigger_at - self._average_trigger)
-            self._average_count = min(self._average_count + 1, limit)
-            for average, trace in zip(self._average, traces):
-                aligned = np.full(trace.shape, np.nan)
-                source = trace[max(0, shift) : trace.size + min(0, shift)]
-                aligned[max(0, -shift) : max(0, -shift) + source.size] = source
-                valid = np.isfinite(aligned) & np.isfinite(average)
-                average[valid] += (aligned[valid] - average[valid]) / self._average_count
+            aligned = [_shifted(trace, shift) for trace in traces]
+            if self._is_outlier(aligned):
+                self._average_rejects += 1
+                if self._average_rejects >= AVERAGE_MAX_REJECTS:
+                    self._restart_average(traces, trigger_at)
+            else:
+                self._average_rejects = 0
+                self._average_count = min(self._average_count + 1, limit)
+                for average, new in zip(self._average, aligned):
+                    valid = np.isfinite(new) & np.isfinite(average)
+                    average[valid] += (new[valid] - average[valid]) / self._average_count
         return [average.copy() for average in self._average], self._average_trigger
+
+    def _restart_average(self, traces: list[np.ndarray], trigger_at: float) -> None:
+        self._average = [trace.copy() for trace in traces]
+        self._average_trigger = trigger_at
+        self._average_count = 1
+        self._average_rejects = 0
+
+    def _is_outlier(self, aligned: list[np.ndarray]) -> bool:
+        deviating = total = 0
+        for i, (average, new) in enumerate(zip(self._average, aligned)):
+            if not self._enabled(i):
+                continue
+            valid = np.isfinite(new) & np.isfinite(average)
+            limit = AVERAGE_OUTLIER_DIVS * self._vdiv(i)
+            deviating += int(np.count_nonzero(np.abs(new[valid] - average[valid]) > limit))
+            total += int(np.count_nonzero(valid))
+        return total > 0 and deviating > AVERAGE_OUTLIER_FRACTION * total
 
     def start_autoset(self) -> None:
         """Procura os sinais com escalas largas e depois ajusta tudo a eles."""
@@ -1562,3 +1594,11 @@ class MainWindow(QMainWindow):
             if elapsed > 0:
                 parts.append(f"{(len(self._frame_times) - 1) / elapsed:.0f} quadros/s")
         self._scale_label.setText("   |   ".join(parts))
+
+
+def _shifted(trace: np.ndarray, shift: int) -> np.ndarray:
+    """Desloca o traço shift amostras para a esquerda, completando com NaN."""
+    result = np.full(trace.shape, np.nan)
+    source = trace[max(0, shift) : trace.size + min(0, shift)]
+    result[max(0, -shift) : max(0, -shift) + source.size] = source
+    return result

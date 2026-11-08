@@ -48,17 +48,16 @@ Regras:
 Validado com o 6022BL real (Windows 11, firmware 0x0210, 2026-11-08):
 
 - Captura correta do sinal de calibração (1 kHz, 0 a 2 V) e calibração da EEPROM.
-- Dois canais sem perda de amostras até 8 MS/s na maioria das execuções. De 10 a
-  16 MS/s a perda varia entre execuções; a partir de 24 MS/s sempre há perda, a
-  partir de ~6.000 amostras.
-- Em 2026-11-08 houve períodos com perda até em 1 a 6 MS/s, que sumiram minutos
-  depois sem mudança no código: depende do estado do PC ou do USB. Investigar
-  transferências assíncronas ou a política RAW_IO do WinUSB.
+- Cada leitura começa com 2048 bytes velhos do FIFO do aparelho (o salto no
+  sinal fica na amostra 1024 com dois canais), mas só em parte das leituras,
+  o que fazia parecer perda intermitente. `STALE_FIFO_BYTES` os descarta.
+- Depois disso, de 4 a 16 MS/s com dois canais, 2% a 3% das capturas perdem um
+  trecho no meio, igual em todas as taxas; ler com transferências assíncronas
+  em fila não mudou nada. A média descarta essas capturas.
 - Modo roll com leitura contínua: 20 mil pontos por tela sem lacuna, sinal de
   calibração medido em 1 kHz.
-- Um canal a 16 MS/s funciona, mas a perda de amostras não foi medida (o sinal
-  de calibração precisa estar no CH1).
-- O início das leituras não mostrou amostras ruins.
+- Um canal funciona, mas a perda de amostras não foi medida (o sinal de
+  calibração precisa estar no CH1); o limite de 30 MS/s vem da taxa em bytes.
 - Com o firmware aberto, o aparelho vira outra instância USB (`DSO-6022BL`, com
   número de série) e precisa de WinUSB próprio. O driver da Hantek, se instalado,
   ainda carrega o firmware original a cada conexão.

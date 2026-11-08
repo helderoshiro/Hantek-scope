@@ -889,3 +889,38 @@ def test_pulse_and_delay_rows(qapp):
     assert "ciclo 25.0%" in text
     assert "larg+ 125 µs" in text
     assert re.search(r"CH1→CH2\s+atraso 50 µs\s+fase 36.0°", text)
+
+
+def test_average_leaves_out_a_capture_that_does_not_match(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._average_n.setCurrentIndex(window._average_n.findData(8))
+    square = np.where(np.arange(2000) % 500 < 250, 1.0, -1.0)
+    zeros = np.zeros(2000)
+    for _ in range(4):
+        averaged, _ = window._accumulate_average([square, zeros], 100.0)
+    # Captura com amostras perdidas: as bordas chegam 40 amostras antes.
+    broken = np.roll(square, -40)
+    averaged, _ = window._accumulate_average([broken, zeros], 100.0)
+    assert np.array_equal(averaged[0], square)  # Sem degraus.
+    assert window._average_count == 4
+    # Três seguidas: o sinal mudou de verdade e a média recomeça com ele.
+    for _ in range(2):
+        averaged, _ = window._accumulate_average([broken, zeros], 100.0)
+    assert np.array_equal(averaged[0], broken)
+    assert window._average_count == 1
+
+
+def test_side_panel_is_wide_enough_for_its_contents(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    scroll = window.centralWidget().layout().itemAt(1).widget()
+    panel = scroll.widget()
+    assert scroll.width() >= panel.minimumSizeHint().width() + scroll.verticalScrollBar().sizeHint().width()
+
+
+def test_fft_axis_labels_read_in_hertz(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    axis = window._spectrum_plot.getAxis("bottom")
+    axis.setLogMode(True)
+    assert axis.tickStrings([2, 3, 6], 1, 1) == ["100 Hz", "1 kHz", "1 MHz"]
+    axis.setLogMode(False)
+    assert axis.tickStrings([0, 500e3], 1, 1) == ["0 Hz", "500 kHz"]
