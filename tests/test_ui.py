@@ -970,3 +970,28 @@ def test_side_panel_fits_without_scrolling(qapp):
     window = MainWindow([SimulatedScope(seed=1)])
     scroll = window.centralWidget().layout().itemAt(1).widget()
     assert scroll.widget().minimumSizeHint().height() <= 900
+
+
+def test_middle_button_drag_pans_even_over_a_cursor(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window.resize(1500, 900)
+    window.show()
+    try:
+        window._add_cursor(vertical=True)
+        qapp.processEvents()
+        viewport = window._plot.viewport()
+        # Começa sobre a linha do disparo, no centro: o botão do meio não a move.
+        x = window._plot.mapFromScene(
+            window._plot.getViewBox().mapViewToScene(QPointF(5, 0))
+        ).x()
+        start = QPoint(int(x), 200)
+        QTest.mousePress(viewport, Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.NoModifier, start)
+        for k in range(1, 11):
+            QTest.mouseMove(viewport, start - QPoint(15 * k, 0))
+            qapp.processEvents()
+        QTest.mouseRelease(viewport, Qt.MouseButton.MiddleButton, Qt.KeyboardModifier.NoModifier, start - QPoint(150, 0))
+        assert window._trigger_x < 4.5
+        cursor = window._plot.time_cursors[0]
+        assert cursor.value() == 3  # O cursor ficou onde estava.
+    finally:
+        window.close()

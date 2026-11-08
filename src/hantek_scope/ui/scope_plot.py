@@ -15,9 +15,11 @@ PAN_DIVS_PER_STEP = 0.5
 
 
 class _DragViewBox(pg.ViewBox):
-    """Arrastar o fundo do gráfico com o botão esquerdo desloca na horizontal.
+    """Arrastar o fundo com o botão esquerdo, ou com o do meio (a roda
+    pressionada) em qualquer ponto, desloca na horizontal.
 
-    Linhas e cursores recebem o arrasto antes, quando estão sob o mouse.
+    Com o botão esquerdo, linhas e cursores sob o mouse recebem o arrasto antes;
+    o botão do meio não os move, então desloca mesmo sobre eles.
     """
 
     def __init__(self, on_drag) -> None:
@@ -25,7 +27,7 @@ class _DragViewBox(pg.ViewBox):
         self._on_drag = on_drag
 
     def mouseDragEvent(self, event, axis=None) -> None:
-        if event.button() != Qt.MouseButton.LeftButton:
+        if event.button() not in (Qt.MouseButton.LeftButton, Qt.MouseButton.MiddleButton):
             event.ignore()
             return
         event.accept()

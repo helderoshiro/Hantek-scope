@@ -27,7 +27,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 - A média deixa de fora capturas muito diferentes dela, que deixavam degraus
   nas bordas, e recomeça se o sinal mudar de verdade.
 - Painel lateral em duas colunas, sem precisar rolar, e sem cortar os textos.
-- Navegação horizontal também pela rolagem horizontal do touchpad, pelas setas
+- Navegação horizontal também arrastando com a roda do mouse pressionada, pela
+  rolagem horizontal do touchpad, pelas setas
   do teclado e por botões no grupo Horizontal; o quadro de medições não bloqueia
   mais o arrasto.
 

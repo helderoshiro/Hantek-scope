@@ -24,6 +24,7 @@ simulador. A fonte em uso aparece no painel lateral e na barra de status.
 |---|---|
 | Roda do mouse sobre o gráfico | Muda o tempo/div, aproximando o ponto sob o mouse |
 | Arrastar o fundo do gráfico | Desloca o traço na horizontal |
+| Arrastar com a roda pressionada | Desloca o traço, mesmo sobre cursores e linhas |
 | Rolagem horizontal (touchpad) | Desloca o traço na horizontal |
 | Setas ← → (gráfico selecionado) | Desloca uma divisão; com Shift, um décimo |
 | Botões ◀◀ ◀ ▶ ▶▶ (Horizontal) | Deslocam meia tela ou uma divisão |
