@@ -5,6 +5,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+## [0.2.0] - 2026-11-08
+
 ### Adicionado
 
 - Trigger por borda (subida ou descida), com modos Auto, Normal e Único,
