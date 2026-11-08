@@ -11,6 +11,7 @@ BACKGROUND = "#14171c"
 MARKER_COLOR = "#9aa0a6"
 CURSOR_COLOR = "#e0e0e0"
 OVERLAY_MARGIN = (60, 8)  # Distância das leituras até a borda do gráfico.
+PAN_DIVS_PER_STEP = 0.5
 
 
 class _DragViewBox(pg.ViewBox):
@@ -51,6 +52,7 @@ class ScopePlot(pg.PlotWidget):
         self.setMenuEnabled(False)
         self.setMouseEnabled(x=False, y=False)
         self.hideButtons()
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)  # Para receber as setas.
         self.showAxis("right")
         self.setRange(xRange=(0, HORIZONTAL_DIVS), yRange=(-HALF_DIVS, HALF_DIVS), padding=0)
         for side, color in (("left", channel_colors[0]), ("right", channel_colors[1])):
@@ -164,6 +166,12 @@ class ScopePlot(pg.PlotWidget):
         if watched is self.viewport():
             if event.type() == QEvent.Type.Wheel:
                 delta = event.angleDelta()
+                shift = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+                if abs(delta.x()) > abs(delta.y()) and not shift:
+                    # Rolagem horizontal (touchpad, roda inclinável): desloca o traço,
+                    # meia divisão por "clique".
+                    self.dragged.emit(delta.x() / WHEEL_STEP * PAN_DIVS_PER_STEP)
+                    return True
                 # Com Shift, alguns sistemas convertem a rolagem em horizontal.
                 self._wheel_accumulated += delta.y() or delta.x()
                 steps = int(self._wheel_accumulated / WHEEL_STEP)
@@ -183,8 +191,19 @@ class ScopePlot(pg.PlotWidget):
             f"background: rgba(20, 23, 28, 210); color: {CURSOR_COLOR}; border: 1px solid #3a3f45;"
             " padding: 4px; font-family: Consolas, monospace;"
         )
+        # As leituras não podem bloquear o arrasto nem os cursores embaixo delas.
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         label.hide()
         return label
+
+    def keyPressEvent(self, event) -> None:
+        # Setas: uma divisão; com Shift, um décimo. "Direita" mostra o que vem depois.
+        steps = {Qt.Key.Key_Left: 1, Qt.Key.Key_Right: -1}.get(event.key())
+        if steps is None:
+            super().keyPressEvent(event)
+            return
+        fine = event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+        self.dragged.emit(steps * (0.1 if fine else 1.0))
 
     def _place_overlays(self) -> None:
         x, y = OVERLAY_MARGIN

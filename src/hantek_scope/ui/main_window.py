@@ -182,8 +182,10 @@ class ChannelControls(QGroupBox):
         form = QFormLayout(self)
         form.addRow(checks)
         form.addRow("Volts/div", self.volts_per_div)
-        form.addRow("Ponteira", self.probe)
-        form.addRow("Acoplamento", self.coupling)
+        probe_and_coupling = QHBoxLayout()
+        probe_and_coupling.addWidget(self.probe)
+        probe_and_coupling.addWidget(self.coupling)
+        form.addRow("Ponteira", probe_and_coupling)
         form.addRow("Posição", self.position)
         form.addRow(self.mains_filter)
         form.addRow(self.mains_note)
@@ -261,7 +263,7 @@ class MainWindow(QMainWindow):
         # Volts/div de entrada escolhidos pelo sinal, nos canais em AC.
         self._ac_input_vdiv: list[float | None] = [None] * self._backend.n_channels
 
-        self.resize(1200, 760)
+        self.resize(1500, 860)
 
         self._plot = ScopePlot(CHANNEL_COLORS)
         self._plot.setToolTip(
@@ -338,17 +340,18 @@ class MainWindow(QMainWindow):
         self._source.setCurrentIndex(self._backends.index(self._backend))
         self._source.currentIndexChanged.connect(self._on_source_changed)
 
-        source = QGroupBox("Fonte")
-        QVBoxLayout(source).addWidget(self._source)
+        source = QFormLayout()
+        source.addRow("Fonte", self._source)
 
         self._run_button = QPushButton("Executar")
         self._run_button.setCheckable(True)
-        self._run_button.setMinimumHeight(40)
+        self._run_button.setMinimumHeight(36)
         self._run_button.toggled.connect(self._on_run_toggled)
 
         self._pause_button = QPushButton("Pausar tela")
         self._pause_button.setCheckable(True)
         self._pause_button.setEnabled(False)
+        self._pause_button.setMinimumHeight(36)
         self._pause_button.setToolTip("Congela a tela; a aquisição continua")
         self._pause_button.toggled.connect(self._on_pause_toggled)
 
@@ -366,15 +369,18 @@ class MainWindow(QMainWindow):
             "Média das capturas alinhadas pelo disparo: reduz o ruído de um sinal repetitivo"
         )
         self._average_n.currentIndexChanged.connect(self._on_settings_changed)
+        save = QHBoxLayout()
+        save.addWidget(save_image)
+        save.addWidget(save_data)
         acquisition = QGroupBox("Aquisição")
         acquisition_form = QFormLayout(acquisition)
         acquisition_form.addRow(autoset)
         acquisition_form.addRow("Média", self._average_n)
+        acquisition_form.addRow(save)
 
-        save = QGroupBox("Salvar a tela")
-        save_layout = QHBoxLayout(save)
-        save_layout.addWidget(save_image)
-        save_layout.addWidget(save_data)
+        run = QHBoxLayout()
+        run.addWidget(self._run_button)
+        run.addWidget(self._pause_button)
 
         self._time_per_div = QComboBox()
         for seconds in TIME_PER_DIV:
@@ -385,10 +391,28 @@ class MainWindow(QMainWindow):
         center = QPushButton("Disparo ao centro")
         center.setToolTip("Volta o ponto do disparo para o meio da tela")
         center.clicked.connect(lambda: self._set_trigger_x(HORIZONTAL_DIVS / 2))
+        pan = QHBoxLayout()
+        for text, divs, tip in (
+            ("◀◀", 5.0, "Meia tela para trás"),
+            ("◀", 1.0, "Uma divisão para trás"),
+            ("▶", -1.0, "Uma divisão para a frente"),
+            ("▶▶", -5.0, "Meia tela para a frente"),
+        ):
+            button = QPushButton(text)
+            button.setToolTip(tip)
+            button.setMinimumWidth(0)
+            button.setMaximumWidth(48)
+            button.setAutoRepeat(True)
+            button.clicked.connect(lambda _=False, d=divs: self._on_dragged(d))
+            pan.addWidget(button)
+        self._view_center_label = QLabel()
+        self._view_center_label.setToolTip("Tempo, a partir do disparo, no meio da tela")
 
         timebase = QGroupBox("Horizontal")
         timebase_form = QFormLayout(timebase)
         timebase_form.addRow("Tempo/div", self._time_per_div)
+        timebase_form.addRow(pan)
+        timebase_form.addRow("Centro", self._view_center_label)
         timebase_form.addRow(center)
 
         self._channels = []
@@ -398,22 +422,28 @@ class MainWindow(QMainWindow):
             channel.probe_changed.connect(lambda ratio, i=i: self._on_probe_changed(i, ratio))
             self._channels.append(channel)
 
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.addWidget(source)
-        layout.addWidget(self._run_button)
-        layout.addWidget(self._pause_button)
-        layout.addWidget(acquisition)
-        layout.addWidget(save)
-        layout.addWidget(timebase)
+        # Duas colunas, para caber tudo sem rolar: à esquerda, execução, tempo,
+        # trigger e leituras; à direita, os canais e o que se calcula com eles.
+        left = QVBoxLayout()
+        left.addLayout(source)
+        left.addLayout(run)
+        left.addWidget(acquisition)
+        left.addWidget(timebase)
+        left.addWidget(self._build_trigger_group())
+        left.addWidget(self._build_cursor_group())
+        left.addWidget(self._build_measurement_group())
+        left.addStretch(1)
+        right = QVBoxLayout()
         for channel in self._channels:
-            layout.addWidget(channel)
-        layout.addWidget(self._build_math_group())
-        layout.addWidget(self._build_analysis_group())
-        layout.addWidget(self._build_trigger_group())
-        layout.addWidget(self._build_cursor_group())
-        layout.addWidget(self._build_measurement_group())
-        layout.addStretch(1)
+            right.addWidget(channel)
+        right.addWidget(self._build_math_group())
+        right.addWidget(self._build_analysis_group())
+        right.addStretch(1)
+        panel = QWidget()
+        layout = QHBoxLayout(panel)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.addLayout(left)
+        layout.addLayout(right)
 
         scroll = QScrollArea()
         scroll.setWidget(panel)
@@ -530,8 +560,10 @@ class MainWindow(QMainWindow):
         group = QGroupBox("Trigger")
         form = QFormLayout(group)
         form.addRow("Modo", self._trigger_mode)
-        form.addRow("Fonte", self._trigger_source)
-        form.addRow("Borda", self._trigger_edge)
+        source_and_edge = QHBoxLayout()
+        source_and_edge.addWidget(self._trigger_source)
+        source_and_edge.addWidget(self._trigger_edge)
+        form.addRow("Fonte", source_and_edge)
         form.addRow("Nível", self._trigger_level)
         form.addRow("Estado", self._trigger_status)
         return group
@@ -549,27 +581,26 @@ class MainWindow(QMainWindow):
             self._cursor_channel.addItem(self._trace_name(i), i)
         self._cursor_channel.currentIndexChanged.connect(self._on_cursor_channel_changed)
 
-        hint = QLabel("Arraste para mover; clique direito para remover.")
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #9aa0a6;")
 
         buttons = QHBoxLayout()
         buttons.addWidget(self._add_time_cursor)
         buttons.addWidget(self._add_volt_cursor)
 
         group = QGroupBox("Cursores")
+        group.setToolTip("Arraste para mover; clique direito em um cursor para removê-lo")
         form = QFormLayout(group)
         form.addRow(buttons)
         form.addRow(clear)
         form.addRow("Tensão em", self._cursor_channel)
-        form.addRow(hint)
         return group
 
     def _build_measurement_group(self) -> QGroupBox:
         self._measurements_on = QCheckBox("Mostrar no gráfico")
         self._measurements_on.setChecked(True)
-        self._measure_pulses = QCheckBox("Pulsos: ciclo, larguras, subida e descida")
-        self._measure_delay = QCheckBox("Atraso e fase do CH2 em relação ao CH1")
+        self._measure_pulses = QCheckBox("Pulsos (ciclo, larguras, bordas)")
+        self._measure_pulses.setToolTip("Ciclo de trabalho, larguras + e −, subida e descida de 10% a 90%")
+        self._measure_delay = QCheckBox("Atraso e fase CH1→CH2")
+        self._measure_delay.setToolTip("Atraso das bordas de subida do CH2 em relação às do CH1")
         group = QGroupBox("Medições")
         layout = QVBoxLayout(group)
         for checkbox in (self._measurements_on, self._measure_pulses, self._measure_delay):
@@ -1087,6 +1118,7 @@ class MainWindow(QMainWindow):
             self._trigger_x = max(-limit, min(HORIZONTAL_DIVS + limit, self._trigger_x))
         self._plot.set_trigger_x(None if roll else self._trigger_x)
         self._plot.trigger_level.setVisible(not roll)
+        self._update_view_center()
         for i, channel in enumerate(self._channels):
             if not channel.is_ac():
                 self._ac_input_vdiv[i] = None
@@ -1155,8 +1187,15 @@ class MainWindow(QMainWindow):
         self._trigger_x = x_divs
         self._on_settings_changed()
 
+    def _update_view_center(self) -> None:
+        if self._is_roll():
+            self._view_center_label.setText("modo roll")
+        else:
+            self._view_center_label.setText(format_si(self._time_at(HORIZONTAL_DIVS / 2), "s"))
+
     def _on_trigger_position_changed(self) -> None:
         self._trigger_x = self._plot.trigger_position.value()
+        self._update_view_center()
         self._update_axes()
         self._update_cursor_readout()
         self._redraw()

@@ -924,3 +924,49 @@ def test_fft_axis_labels_read_in_hertz(qapp):
     assert axis.tickStrings([2, 3, 6], 1, 1) == ["100 Hz", "1 kHz", "1 MHz"]
     axis.setLogMode(False)
     assert axis.tickStrings([0, 500e3], 1, 1) == ["0 Hz", "500 kHz"]
+
+
+def test_mouse_drag_on_the_plot_pans(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window.resize(1500, 900)
+    window.show()
+    try:
+        qapp.processEvents()
+        viewport = window._plot.viewport()
+        QTest.mousePress(viewport, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(300, 200))
+        for k in range(1, 11):
+            QTest.mouseMove(viewport, QPoint(300 + 20 * k, 200))
+            qapp.processEvents()
+        QTest.mouseRelease(viewport, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, QPoint(500, 200))
+        assert window._trigger_x > 6
+    finally:
+        window.close()
+
+
+def test_horizontal_scroll_arrows_and_buttons_pan(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    event = QWheelEvent(
+        QPointF(50, 50), QPointF(50, 50), QPoint(0, 0), QPoint(-240, 0),
+        Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False,
+    )
+    QApplication.sendEvent(window._plot.viewport(), event)
+    assert window._trigger_x == pytest.approx(4.0)
+    assert window._tdiv() == pytest.approx(200e-6)  # Não mexeu no zoom.
+    QTest.keyClick(window._plot, Qt.Key.Key_Right)
+    assert window._trigger_x == pytest.approx(3.0)
+    QTest.keyClick(window._plot, Qt.Key.Key_Left, Qt.KeyboardModifier.ShiftModifier)
+    assert window._trigger_x == pytest.approx(3.1)
+    assert window._view_center_label.text() == "380 µs"
+    window._on_dragged(-5.0)
+    assert window._trigger_x == pytest.approx(-1.9)
+
+
+def test_measurement_overlay_lets_the_mouse_through(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    assert window._measurement_readout.testAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+
+def test_side_panel_fits_without_scrolling(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    scroll = window.centralWidget().layout().itemAt(1).widget()
+    assert scroll.widget().minimumSizeHint().height() <= 900

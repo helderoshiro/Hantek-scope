@@ -24,6 +24,9 @@ simulador. A fonte em uso aparece no painel lateral e na barra de status.
 |---|---|
 | Roda do mouse sobre o gráfico | Muda o tempo/div, aproximando o ponto sob o mouse |
 | Arrastar o fundo do gráfico | Desloca o traço na horizontal |
+| Rolagem horizontal (touchpad) | Desloca o traço na horizontal |
+| Setas ← → (gráfico selecionado) | Desloca uma divisão; com Shift, um décimo |
+| Botões ◀◀ ◀ ▶ ▶▶ (Horizontal) | Deslocam meia tela ou uma divisão |
 | Ctrl + roda | Muda os volts/div do CH1 |
 | Shift + roda | Muda os volts/div do CH2 |
 | Arrastar a linha "T" horizontal | Muda o nível do trigger |
@@ -40,6 +43,8 @@ Para examinar uma borda longe do disparo, ponha o mouse sobre ela e role a roda
 para cima: a escala diminui com a borda parada sob o mouse. O disparo pode sair
 da tela; uma seta na borda indica de que lado ele está, e "Disparo ao centro"
 volta ao início.
+Com a captura parada, só há dados para cerca de meia tela além de cada borda;
+com ela rodando, cada nova captura acompanha o deslocamento.
 
 ### Aquisição
 
