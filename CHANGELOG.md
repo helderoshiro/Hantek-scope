@@ -5,6 +5,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+## [0.4.0] - 2026-11-08
+
 ### Adicionado
 
 - Seleção da ponteira (1x ou 10x) por canal, com correção de escalas,
