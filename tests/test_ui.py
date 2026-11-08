@@ -622,3 +622,104 @@ def test_off_screen_trigger_shows_the_waveform_after_it(qapp):
     curve = window._curves[0]
     assert trace_value_at(curve, 0.05) == pytest.approx(0, abs=0.15)
     assert trace_value_at(curve, 0.5) > trace_value_at(curve, 0.05)
+
+
+# Modo roll e taxas com um canal
+
+
+class TwoSpeedScope(SimulatedScope):
+    sample_rates = (1e6, 8e6)
+    single_channel_rates = (1e6, 8e6, 16e6)
+
+
+def test_single_channel_unlocks_faster_rates(qapp):
+    window = MainWindow([TwoSpeedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(1e-6))
+    assert window._current_config().sample_rate == 8e6
+    window._channels[1].enabled.setChecked(False)
+    config = window._current_config()
+    assert (config.sample_rate, config.channels) == (16e6, 1)
+    assert "só CH1" in window._scale_label.text()
+    window._math_operation.setCurrentIndex(window._math_operation.findData("add"))
+    assert window._current_config().channels == 2
+    window._math_operation.setCurrentIndex(0)
+    window._trigger_source.setCurrentIndex(1)
+    assert window._current_config().channels == 2
+
+
+def roll_frames(window, count, start=100.0, gap_after=None, gap_s=1.0):
+    plan = window._roll_plan()
+    config = plan.config
+    chunk_s = config.n_samples / config.sample_rate
+    frames, end = [], start
+    for k in range(count):
+        end += chunk_s + (gap_s if k == gap_after else 0)
+        t = end - (config.n_samples - np.arange(config.n_samples)) / config.sample_rate
+        volts = np.vstack([np.sin(2 * np.pi * 2 * t), np.zeros(t.size)])
+        frames.append(Frame(config.sample_rate, volts, end_time=end))
+    return frames
+
+
+def test_roll_mode_scrolls_the_newest_samples_to_the_right(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(100e-3))
+    assert window._is_roll()
+    assert not window._plot.trigger_position.isVisible()
+    assert not window._plot.trigger_level.isVisible()
+    window._on_roll_frames(roll_frames(window, 30))  # 1,5 s, mais que a tela de 1 s.
+    x = window._display_x(window._last_frame)
+    assert x[-1] == pytest.approx(10, abs=1e-3)
+    assert x[0] <= 0  # O trecho mais antigo já saiu pela esquerda.
+    assert window._trigger_status.text() == "Modo roll (sem trigger)"
+    # A média de blocos reduz 100 kS/s do simulador para 20 mil pontos por tela.
+    visible = window._visible_samples(window._last_frame)
+    assert visible.sum() == pytest.approx(20_000, rel=0.01)
+    assert dict(window._plot.getAxis("bottom")._tickLevels[0])[10] == "0 s"
+    assert dict(window._plot.getAxis("bottom")._tickLevels[0])[0] == "-1 s"
+
+
+def test_roll_mode_marks_interrupted_reads_as_a_gap(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(200e-3))
+    window._on_roll_frames(roll_frames(window, 10, gap_after=4, gap_s=0.5))
+    trace = window._traces[0]
+    assert np.isnan(trace).sum() == 1
+    assert "MATH" not in window._measurement_readout.text()
+    assert "CH1" in window._measurement_readout.text()
+
+
+def test_roll_mode_ignores_reads_from_the_old_settings(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    frames = roll_frames(window, 3)  # Feitos com 200 µs/div, antes do roll.
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(100e-3))
+    window._on_roll_frames(frames)
+    assert window._last_frame is None
+
+
+def test_roll_mode_runs_with_the_simulator(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(100e-3))
+    window.start()
+    try:
+        assert wait_until(lambda: window._last_frame is not None and window._roll_t.size > 3000)
+        x = window._display_x(window._last_frame)
+        assert x[-1] == pytest.approx(10, abs=1e-3)
+        # Uma lacuna eventual vem da espera do teste, que segura a thread de aquisição.
+        assert np.isfinite(window._traces[0]).mean() > 0.99
+    finally:
+        window.stop()
+    # Sair do roll limpa o traço, que não tem disparo para alinhar.
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(1e-3))
+    assert window._last_frame is None
+
+
+def test_save_data_in_roll_mode_uses_time_to_the_newest_sample(qapp, tmp_path):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(100e-3))
+    window._on_roll_frames(roll_frames(window, 30))
+    path = tmp_path / "roll.csv"
+    window.save_data(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    assert any("Modo roll" in line for line in lines if line.startswith("#"))
+    last = lines[-1].split(",")
+    assert float(last[0]) == pytest.approx(0, abs=1e-4)

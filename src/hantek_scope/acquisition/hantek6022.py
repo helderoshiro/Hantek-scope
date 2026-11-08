@@ -13,12 +13,15 @@ from hantek_scope.timebase import VERTICAL_DIVS
 # Medido no 6022BL com dois canais: sem perdas até 8 MS/s; de 10 a 16 MS/s a
 # perda varia com a carga do PC; a partir de 24 MS/s sempre há amostras perdidas.
 MAX_TWO_CHANNEL_RATE = 8e6
+# Com um canal só, o USB leva metade dos bytes por amostra.
+MAX_ONE_CHANNEL_RATE = 16e6
 RATE_INDEX = {
     rate: index
     for index, (_, rate) in Oscilloscope.SAMPLE_RATES.items()
-    if rate <= MAX_TWO_CHANNEL_RATE
+    if rate <= MAX_ONE_CHANNEL_RATE
 }
 USB_PACKET_BYTES = 512
+BULK_ENDPOINT = 0x86
 CONTROL_TIMEOUT_MS = 1000
 READ_MARGIN_MS = 1000
 REENUMERATION_TIMEOUT_S = 10.0
@@ -53,7 +56,8 @@ class Hantek6022Backend:
 
     name = "Hantek 6022BL"
     n_channels = 2
-    sample_rates = tuple(sorted(RATE_INDEX))
+    sample_rates = tuple(sorted(r for r in RATE_INDEX if r <= MAX_TWO_CHANNEL_RATE))
+    single_channel_rates = tuple(sorted(RATE_INDEX))
 
     def __init__(self, scope_factory: Callable[[], Oscilloscope] = Oscilloscope) -> None:
         self._scope_factory = scope_factory
@@ -61,6 +65,10 @@ class Hantek6022Backend:
         self._config: CaptureConfig | None = None
         self._rate: float | None = None
         self._range_indexes = [1, 1]
+        self._channels: int | None = None
+        # Leitura contínua: captura ligada e bytes que sobraram do último pacote.
+        self._streaming = False
+        self._stream_buffer = bytearray()
 
     def is_connected(self) -> bool:
         try:
@@ -88,9 +96,15 @@ class Hantek6022Backend:
         self._scope = scope
         self._rate = None
         self._range_indexes = [None, None]
+        self._channels = None
+        self._streaming = False
 
     def close(self) -> None:
         if self._scope is not None:
+            try:
+                self._stop_stream()
+            except usb1.USBError:
+                pass  # O aparelho pode ter sido desconectado; fecha mesmo assim.
             self._scope.close_handle(release_interface=True)
             self._scope = None
 
@@ -99,6 +113,16 @@ class Hantek6022Backend:
         indexes = [range_index_for(v) for v in config.volts_per_div] or [1, 1]
         setters = (scope.set_ch1_voltage_range, scope.set_ch2_voltage_range)
         try:
+            old = self._config
+            if old is None or (config.sample_rate, config.channels, config.stream) != (
+                old.sample_rate,
+                old.channels,
+                old.stream,
+            ):
+                self._stop_stream()
+            if config.channels != self._channels:
+                scope.set_num_channels(config.channels, timeout=CONTROL_TIMEOUT_MS)
+                self._channels = config.channels
             if config.sample_rate != self._rate:
                 scope.set_sample_rate(RATE_INDEX[config.sample_rate], timeout=CONTROL_TIMEOUT_MS)
                 self._rate = config.sample_rate
@@ -117,20 +141,48 @@ class Hantek6022Backend:
             raise RuntimeError("configure() deve ser chamado antes de read_frame()")
         rate = self._config.sample_rate
         n = self._config.n_samples
+        n_channels = self._config.channels
         timeout_ms = math.ceil(1000 * n / rate) + READ_MARGIN_MS
         try:
-            raw = scope.read_data(_samples_in_whole_packets(n), raw=True, timeout=timeout_ms)
+            if self._config.stream:
+                raw = self._read_stream(scope, n, n_channels, timeout_ms)
+            else:
+                raw = scope.read_data(_samples_in_whole_packets(n, n_channels), raw=True, timeout=timeout_ms)
         except usb1.USBError as exc:
             raise ScopeError(MSG_COMMUNICATION.format(error=exc)) from exc
-        channels = [
-            scope.adc_to_voltage(
+        channels = np.zeros((self.n_channels, n))
+        for i, data in enumerate(raw[:n_channels]):
+            channels[i] = scope.adc_to_voltage(
                 np.frombuffer(data, dtype=np.uint8)[:n].astype(float),
                 voltage_range=self._range_indexes[i],
                 channel=i + 1,
             )
-            for i, data in enumerate(raw)
-        ]
-        return Frame(sample_rate=rate, channels=np.stack(channels))
+        return Frame(sample_rate=rate, channels=channels)
+
+    def _read_stream(self, scope: Oscilloscope, n: int, n_channels: int, timeout_ms: int) -> list[bytes]:
+        """Lê n amostras da captura contínua, guardando o que sobrar do pacote.
+
+        read_data() liga e desliga a captura a cada chamada, e o intervalo entre
+        leituras some do sinal. Aqui a captura fica ligada e os bytes de um
+        pacote USB que passam de n ficam para o próximo quadro.
+        """
+        if not self._streaming:
+            self._stream_buffer.clear()
+            scope.start_capture(timeout=CONTROL_TIMEOUT_MS)
+            self._streaming = True
+        needed = n * n_channels
+        while len(self._stream_buffer) < needed:
+            missing = needed - len(self._stream_buffer)
+            size = math.ceil(missing / USB_PACKET_BYTES) * USB_PACKET_BYTES
+            self._stream_buffer += scope.device_handle.bulkRead(BULK_ENDPOINT, size, timeout=timeout_ms)
+        data = bytes(self._stream_buffer[:needed])
+        del self._stream_buffer[:needed]
+        return [data[i::n_channels] for i in range(n_channels)]
+
+    def _stop_stream(self) -> None:
+        if self._streaming and self._scope is not None:
+            self._streaming = False
+            self._scope.stop_capture(timeout=CONTROL_TIMEOUT_MS)
 
     def _require_scope(self) -> Oscilloscope:
         if self._scope is None:
@@ -168,10 +220,10 @@ class Hantek6022Backend:
         raise ScopeError(MSG_FIRMWARE_TIMEOUT)
 
 
-def _samples_in_whole_packets(n_samples: int) -> int:
-    """Arredonda a leitura para pacotes USB inteiros, nos dois canais intercalados.
+def _samples_in_whole_packets(n_samples: int, n_channels: int = 2) -> int:
+    """Arredonda a leitura para pacotes USB inteiros, com os canais intercalados.
 
     Pedir menos que um pacote inteiro causa erro de overflow no libusb.
     """
-    packets = math.ceil(2 * n_samples / USB_PACKET_BYTES)
-    return packets * USB_PACKET_BYTES // 2
+    packets = math.ceil(n_channels * n_samples / USB_PACKET_BYTES)
+    return packets * USB_PACKET_BYTES // n_channels

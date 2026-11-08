@@ -47,8 +47,11 @@ from hantek_scope.timebase import (
     HORIZONTAL_DIVS,
     TIME_PER_DIV,
     VERTICAL_DIVS,
+    RollPlan,
     capture_for,
+    is_roll,
     max_offscreen_divs,
+    roll_plan,
 )
 from hantek_scope.ui.scope_plot import BACKGROUND, CURSOR_COLOR, ScopePlot
 from hantek_scope.ui.worker import AcquisitionWorker
@@ -226,6 +229,11 @@ class MainWindow(QMainWindow):
         self._syncing_trigger_line = False
         # Posição do disparo na tela, em divisões; pode ficar fora dela (zoom ou arrasto).
         self._trigger_x = HORIZONTAL_DIVS / 2
+        # Modo roll: trechos (tempos, tensões) e o fim do último, em time.monotonic.
+        self._roll_chunks: list[tuple[np.ndarray, np.ndarray]] = []
+        self._roll_end = 0.0
+        self._roll_t: np.ndarray | None = None  # Tempos das amostras de _last_frame.
+        self._roll_key: tuple | None = None
         # Volts/div de entrada escolhidos pelo sinal, nos canais em AC.
         self._ac_input_vdiv: list[float | None] = [None] * self._backend.n_channels
 
@@ -265,7 +273,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._mouse_label)
 
         self._plot.wheel_scrolled.connect(self._on_wheel)
-        self._plot.dragged.connect(lambda dx: self._set_trigger_x(self._trigger_x + dx))
+        self._plot.dragged.connect(self._on_dragged)
         self._plot.mouse_moved.connect(self._on_mouse_moved)
         self._plot.mouse_left.connect(lambda: self._mouse_label.setText(""))
         self._plot.trigger_position.sigPositionChanged.connect(self._on_trigger_position_changed)
@@ -468,12 +476,42 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _current_config(self) -> CaptureConfig:
+        if self._is_roll():
+            return self._roll_plan().config
         return capture_for(
             self._tdiv(),
-            self._backend.sample_rates,
-            tuple(self._input_vdiv(i) for i in range(len(self._channels))),
+            self._rates(),
+            self._input_vdivs(),
             offscreen_divs=self._offscreen_divs(),
+            channels=self._capture_channels(),
         )
+
+    def _roll_plan(self) -> RollPlan:
+        return roll_plan(self._tdiv(), self._rates(), self._input_vdivs(), self._capture_channels())
+
+    def _is_roll(self) -> bool:
+        return is_roll(self._tdiv())
+
+    def _input_vdivs(self) -> tuple[float, ...]:
+        return tuple(self._input_vdiv(i) for i in range(len(self._channels)))
+
+    def _single_channel(self) -> bool:
+        """Só o CH1 é necessário: o aparelho pode amostrar mais rápido."""
+        if len(self._channels) < 2:
+            return True
+        return (
+            not self._enabled(1)
+            and self._math_operation.currentData() is None
+            and self._trigger_source.currentData() == 0
+        )
+
+    def _capture_channels(self) -> int:
+        return 1 if self._single_channel() else self._backend.n_channels
+
+    def _rates(self) -> tuple[float, ...]:
+        if self._single_channel():
+            return self._backend.single_channel_rates
+        return self._backend.sample_rates
 
     def _offscreen_divs(self) -> float:
         return max(0.0, -self._trigger_x, self._trigger_x - HORIZONTAL_DIVS)
@@ -515,19 +553,35 @@ class MainWindow(QMainWindow):
         self._math = None
         self._trigger_at = None
         self._ac_input_vdiv = [None] * len(self._channels)
-        for curve in [*self._curves, self._math_curve]:
-            curve.setData([], [])
-        self._update_measurements()
+        self._clear_display()
         self._update_source_labels()
         self._update_scale_label()
         if was_running:
             self.start()
 
+    def _clear_display(self) -> None:
+        self._last_frame = None
+        self._traces = []
+        self._math = None
+        self._trigger_at = None
+        self._roll_chunks = []
+        self._roll_t = None
+        for curve in [*self._curves, self._math_curve]:
+            curve.setData([], [])
+        self._update_measurements()
+
+    def _matches_config(self, frame: Frame, config: CaptureConfig) -> bool:
+        """Descarta quadros lidos antes da última mudança de configuração."""
+        return frame.sample_rate == config.sample_rate and frame.channels.shape[1] == config.n_samples
+
     def _on_frame_ready(self) -> None:
         if self._worker is None:
             return
+        if self._is_roll():
+            self._on_roll_frames(self._worker.take_frames())
+            return
         frame = self._worker.take_frame()
-        if frame is None:
+        if frame is None or not self._matches_config(frame, self._current_config()):
             return
         self._adjust_ac_input_ranges(frame)
         if self._pause_button.isChecked():
@@ -556,6 +610,56 @@ class MainWindow(QMainWindow):
             self._trigger_status.setText("Capturado (único)")
         else:
             self._trigger_status.setText("Disparado")
+
+    def _on_roll_frames(self, frames: list[Frame]) -> None:
+        """Acrescenta os trechos lidos ao fim do traço, que corre para a esquerda."""
+        plan = self._roll_plan()
+        rate = plan.output_rate
+        chunk_s = plan.config.n_samples / plan.config.sample_rate
+        added = False
+        for frame in frames:
+            if not self._matches_config(frame, plan.config):
+                continue
+            self._adjust_ac_input_ranges(frame)
+            if self._pause_button.isChecked():
+                continue
+            n_channels = frame.channels.shape[0]
+            volts = frame.channels.reshape(n_channels, -1, plan.decimation).mean(axis=2)
+            n = volts.shape[1]
+            end = frame.end_time if frame.end_time is not None else time.monotonic()
+            start = end - n / rate
+            if self._roll_chunks:
+                gap = start - self._roll_end
+                if gap > chunk_s / 2:
+                    # Leitura interrompida: uma lacuna, em vez de ligar os trechos.
+                    self._roll_chunks.append(
+                        (np.array([self._roll_end]), np.full((n_channels, 1), np.nan))
+                    )
+                else:
+                    # A latência do USB varia; trechos seguidos ficam encostados.
+                    start = self._roll_end
+            self._roll_chunks.append((start + np.arange(n) / rate, volts))
+            self._roll_end = start + n / rate
+            added = True
+        if not added:
+            return
+
+        oldest = self._roll_end - HORIZONTAL_DIVS * self._tdiv()
+        while len(self._roll_chunks) > 1 and self._roll_chunks[1][0][0] <= oldest:
+            self._roll_chunks.pop(0)
+        self._roll_t = np.concatenate([t for t, _ in self._roll_chunks])
+        volts = np.concatenate([v for _, v in self._roll_chunks], axis=1)
+        self._last_frame = Frame(rate, volts, end_time=self._roll_end)
+        self._traces = self._process(self._last_frame)
+        self._math = self._compute_math(self._traces)
+        self._trigger_at = None
+        self._frame_times.append(time.monotonic())
+        if self._math_fit_pending and self._math is not None:
+            self._math_fit_pending = False
+            self._fit_math_scale()
+        self._redraw()
+        self._update_scale_label()
+        self._trigger_status.setText("Modo roll (sem trigger)")
 
     def _on_failed(self, message: str) -> None:
         self.stop()
@@ -596,11 +700,21 @@ class MainWindow(QMainWindow):
     # Processamento
 
     def _process(self, frame: Frame) -> list[np.ndarray]:
-        """Tensões na ponta da ponteira, com inversão, filtro e acoplamento."""
-        return [
-            condition(volts, frame.sample_rate, channel.settings())
-            for volts, channel in zip(frame.channels, self._channels)
-        ]
+        """Tensões na ponta da ponteira, com inversão, filtro e acoplamento.
+
+        As lacunas (NaN) do modo roll ficam de fora do processamento.
+        """
+        traces = []
+        for volts, channel in zip(frame.channels, self._channels):
+            finite = np.isfinite(volts)
+            if finite.all():
+                traces.append(condition(volts, frame.sample_rate, channel.settings()))
+            else:
+                trace = np.full(volts.shape, np.nan)
+                if finite.any():
+                    trace[finite] = condition(volts[finite], frame.sample_rate, channel.settings())
+                traces.append(trace)
+        return traces
 
     def _compute_math(self, traces: list[np.ndarray]) -> np.ndarray | None:
         operation = self._math_operation.currentData()
@@ -698,20 +812,29 @@ class MainWindow(QMainWindow):
         return self._channels[channel].enabled.isChecked()
 
     def _time_at(self, x_divs: float) -> float:
-        """Tempo relativo ao ponto de disparo."""
-        return (x_divs - self._trigger_x) * self._tdiv()
+        """Tempo relativo ao disparo; no modo roll, à amostra mais recente."""
+        origin = HORIZONTAL_DIVS if self._is_roll() else self._trigger_x
+        return (x_divs - origin) * self._tdiv()
 
     def _on_settings_changed(self) -> None:
-        limit = max_offscreen_divs(self._tdiv(), self._backend.sample_rates)
-        self._trigger_x = max(-limit, min(HORIZONTAL_DIVS + limit, self._trigger_x))
-        self._plot.set_trigger_x(self._trigger_x)
+        roll = self._is_roll()
+        if not roll:
+            limit = max_offscreen_divs(self._tdiv(), self._rates())
+            self._trigger_x = max(-limit, min(HORIZONTAL_DIVS + limit, self._trigger_x))
+        self._plot.set_trigger_x(None if roll else self._trigger_x)
+        self._plot.trigger_level.setVisible(not roll)
         for i, channel in enumerate(self._channels):
             if not channel.is_ac():
                 self._ac_input_vdiv[i] = None
         config = self._current_config()
+        self._check_roll_change(config)
         if self._worker is not None:
             self._worker.set_config(config)
-        mains_possible = can_remove_mains(config.n_samples, config.sample_rate)
+        if roll:
+            # No roll o filtro atua no traço inteiro, que tem vários ciclos da rede.
+            mains_possible = self._roll_plan().output_rate > 2 * MAINS_HZ
+        else:
+            mains_possible = can_remove_mains(config.n_samples, config.sample_rate)
         for channel in self._channels:
             channel.mains_note.setVisible(channel.mains_filter.isChecked() and not mains_possible)
         self._reprocess()
@@ -721,6 +844,24 @@ class MainWindow(QMainWindow):
         self._update_cursor_readout()
         self._redraw()
         self._update_scale_label()
+
+    def _check_roll_change(self, config: CaptureConfig) -> None:
+        """Recomeça o traço ao entrar ou sair do roll, ou ao mudar a taxa dele.
+
+        Parado, o traço do roll continua na tela e acompanha o tempo/div.
+        """
+        roll = self._is_roll()
+        key = (config.sample_rate, self._roll_plan().decimation, config.channels) if roll else None
+        was_roll = self._roll_key is not None
+        if roll != was_roll and self._last_frame is not None:
+            self._clear_display()
+        elif roll and key != self._roll_key and self._worker is not None:
+            self._clear_display()
+        self._roll_key = key
+
+    def _on_dragged(self, dx_divs: float) -> None:
+        if not self._is_roll():
+            self._set_trigger_x(self._trigger_x + dx_divs)
 
     def _on_probe_changed(self, channel: int, ratio: float) -> None:
         # O nível do trigger acompanha a ponteira, para a linha ficar no mesmo lugar.
@@ -952,7 +1093,9 @@ class MainWindow(QMainWindow):
             f"Trigger: {self._trigger_mode.currentText()}, {self._trigger_source.currentText()},"
             f" {self._trigger_edge.currentText().lower()}, {self._trigger_level.value():g} V,"
             f" disparado: {triggered}",
-            "Tempo medido a partir do disparo; tensões na ponta da ponteira.",
+            "Modo roll: tempo medido até a amostra mais recente."
+            if self._is_roll()
+            else "Tempo medido a partir do disparo; tensões na ponta da ponteira.",
         ]
         write_csv(path, self._time_at(x), columns, header, excel_ptbr=excel_ptbr)
 
@@ -1009,6 +1152,8 @@ class MainWindow(QMainWindow):
 
     def _display_x(self, frame: Frame) -> np.ndarray:
         """Posição horizontal de cada amostra, em divisões da tela."""
+        if self._is_roll() and self._roll_t is not None:
+            return HORIZONTAL_DIVS - (frame.end_time - self._roll_t) / self._tdiv()
         samples_per_div = frame.sample_rate * self._tdiv()
         index = np.arange(frame.channels.shape[1])
         if self._trigger_at is None:
@@ -1044,6 +1189,10 @@ class MainWindow(QMainWindow):
             f"{format_si(self._tdiv(), 's')}/div",
             f"{format_si(config.sample_rate, 'S/s')}",
         ]
+        if self._is_roll():
+            parts[0] += " (roll)"
+        elif config.channels == 1 and len(self._channels) > 1:
+            parts[1] += " (só CH1)"
         for i, channel in enumerate(self._channels):
             if self._enabled(i):
                 text = f"CH{i + 1} {format_si(self._vdiv(i), 'V')}/div {channel.summary()}"

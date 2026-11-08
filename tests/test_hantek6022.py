@@ -25,10 +25,19 @@ class FakeDevice:
 class FakeHandle:
     def __init__(self):
         self.firmware_packets = 0
+        self.bulk_sizes = []
+        self.next_byte = 0
 
     def controlWrite(self, *args, timeout=0):
         self.firmware_packets += 1
         return len(args[4])
+
+    def bulkRead(self, endpoint, size, timeout=0):
+        # Bytes numerados, para conferir que nada se perde entre leituras.
+        self.bulk_sizes.append(size)
+        data = bytes((self.next_byte + i) % 256 for i in range(size))
+        self.next_byte = (self.next_byte + size) % 256
+        return data
 
 
 class FakeScope(Oscilloscope):
@@ -85,11 +94,25 @@ class FakeScope(Oscilloscope):
         self.calls.append(("ch2", range_index))
         return True
 
+    def start_capture(self, timeout=0):
+        self.calls.append("start")
+        return True
+
+    def stop_capture(self, timeout=0):
+        self.calls.append("stop")
+        return True
+
+    def set_num_channels(self, nchannels, timeout=0):
+        self.calls.append(("channels", nchannels))
+        self.num_channels = nchannels
+        return True
+
     def read_data(self, data_size=0x400, raw=False, timeout=0):
         if self.read_error is not None:
             raise self.read_error
         self.read_sizes.append(data_size)
-        return bytes([self.adc]) * data_size, bytes([self.adc]) * data_size
+        second = bytes([self.adc]) * data_size if self.num_channels == 2 else b""
+        return bytes([self.adc]) * data_size, second
 
 
 def backend_with(scope):
@@ -107,6 +130,7 @@ def test_range_covers_the_screen_height(volts_per_div, index):
 def test_sample_rates_stay_within_usb_bandwidth():
     assert max(Hantek6022Backend.sample_rates) == 8e6
     assert min(Hantek6022Backend.sample_rates) == 20e3
+    assert max(Hantek6022Backend.single_channel_rates) == hantek6022.MAX_ONE_CHANNEL_RATE
 
 
 def test_every_timebase_uses_a_rate_the_device_accepts():
@@ -159,7 +183,7 @@ def test_configure_sends_only_what_changed():
     scope.calls.clear()
 
     backend.configure(CaptureConfig(1e6, 1000, (1.0, 0.1)))
-    assert scope.calls == [("rate", 1), ("ch1", 1), ("ch2", 10)]
+    assert scope.calls == [("channels", 2), ("rate", 1), ("ch1", 1), ("ch2", 10)]
 
     scope.calls.clear()
     backend.configure(CaptureConfig(4e6, 2000, (1.0, 0.1)))
@@ -203,3 +227,51 @@ def test_is_connected_only_for_the_6022bl():
     assert backend_with(FakeScope()).is_connected()
     assert not backend_with(FakeScope(found=False)).is_connected()
     assert not backend_with(FakeScope(product_id=Oscilloscope.PRODUCT_ID_BE)).is_connected()
+
+
+def test_single_channel_reads_only_ch1():
+    scope = FakeScope(adc=153)
+    backend = backend_with(scope)
+    backend.open()
+    backend.configure(CaptureConfig(16e6, 300, (1.0, 1.0), channels=1))
+    assert ("channels", 1) in scope.calls
+    frame = backend.read_frame()
+    assert frame.channels.shape == (2, 300)
+    np.testing.assert_allclose(frame.channels[0], 25 * 5.12 * 1.01 / 128)
+    assert not frame.channels[1].any()
+    # 300 amostras de um canal são 300 bytes: um pacote de 512.
+    assert scope.read_sizes == [512]
+
+
+def test_stream_keeps_capturing_and_loses_no_bytes_between_frames():
+    scope = FakeScope()
+    backend = backend_with(scope)
+    backend.open()
+    backend.configure(CaptureConfig(20e3, 300, (1.0, 1.0), stream=True))
+    scope.calls.clear()
+    adc = []
+    original = scope.adc_to_voltage
+    scope.adc_to_voltage = lambda counts, **kw: adc.append(counts) or original(counts, **kw)
+    for _ in range(3):
+        backend.read_frame()
+    assert scope.calls == ["start"]  # Liga uma vez e não desliga entre quadros.
+    # Bytes intercalados CH1, CH2: o CH1 recebe os pares, sem pular nenhum.
+    ch1 = np.concatenate([adc[0], adc[2], adc[4]])
+    assert np.array_equal(ch1, np.arange(0, 1800, 2) % 256)
+    # Cada leitura pede pacotes inteiros; a sobra fica para a próxima.
+    assert all(size % 512 == 0 for size in scope.device_handle.bulk_sizes)
+
+
+def test_stream_stops_when_the_rate_changes_and_on_close():
+    scope = FakeScope()
+    backend = backend_with(scope)
+    backend.open()
+    backend.configure(CaptureConfig(20e3, 300, (1.0, 1.0), stream=True))
+    backend.read_frame()
+    backend.configure(CaptureConfig(20e3, 300, (0.1, 1.0), stream=True))
+    assert "stop" not in scope.calls  # Trocar o ganho não interrompe a captura.
+    backend.configure(CaptureConfig(50e3, 300, (0.1, 1.0), stream=True))
+    assert scope.calls.count("stop") == 1
+    backend.read_frame()
+    backend.close()
+    assert scope.calls.count("stop") == 2

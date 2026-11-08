@@ -92,11 +92,16 @@ class ScopePlot(pg.PlotWidget):
         line.setPen(pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
         line.label.setColor(color)
 
-    def set_trigger_x(self, x_divs: float, offscreen_text: str = "") -> None:
-        """Põe a linha do disparo em x; fora da tela, mostra uma seta na borda."""
-        on_screen = 0 <= x_divs <= HORIZONTAL_DIVS
+    def set_trigger_x(self, x_divs: float | None, offscreen_text: str = "") -> None:
+        """Põe a linha do disparo em x; fora da tela, mostra uma seta na borda.
+
+        None oculta as duas, como no modo roll, que não tem disparo.
+        """
+        on_screen = x_divs is not None and 0 <= x_divs <= HORIZONTAL_DIVS
         self.trigger_position.setVisible(on_screen)
-        self._trigger_arrow.setVisible(not on_screen)
+        self._trigger_arrow.setVisible(x_divs is not None and not on_screen)
+        if x_divs is None:
+            return
         if on_screen:
             self.trigger_position.blockSignals(True)
             self.trigger_position.setValue(x_divs)

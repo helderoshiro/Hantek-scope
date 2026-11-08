@@ -33,6 +33,7 @@ class SimulatedScope:
 
     name = "Simulador"
     sample_rates = SAMPLE_RATES
+    single_channel_rates = SAMPLE_RATES
 
     def __init__(
         self,
