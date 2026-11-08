@@ -5,6 +5,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+## [0.3.0] - 2026-11-08
+
 ### Adicionado
 
 - Medições automáticas por canal sobre o gráfico: frequência, período, Vpp,
