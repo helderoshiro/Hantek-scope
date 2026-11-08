@@ -44,6 +44,7 @@ from hantek_scope.processing.channel import (
 from hantek_scope.processing.math_channel import OPERATIONS, combine
 from hantek_scope.processing.measurements import measure
 from hantek_scope.processing.spectrum import find_peak, spectrum
+from hantek_scope.processing.timing import measure_delay, measure_timing
 from hantek_scope.processing.trigger import find_trigger
 from hantek_scope.timebase import (
     CAPTURE_DIVS,
@@ -82,6 +83,19 @@ FFT_WINDOWS = (
     ("Retangular", "rect"),
 )
 MIN_FFT_SAMPLES = 16
+AVERAGE_COUNTS = (1, 2, 4, 8, 16, 32, 64, 128)
+# Autoset: altura do sinal na tela, folga da faixa de entrada e quadros descartados
+# depois de cada mudança (podem ter sido lidos com a configuração anterior).
+AUTOSET_SCREEN_DIVS = 6
+AUTOSET_HEADROOM = 1.05
+AUTOSET_SKIP_FRAMES = 2
+AUTOSET_MIN_VPP = 0.15  # Na entrada do aparelho, acima do ruído de 8 bits.
+AUTOSET_SEARCH_TIME_PER_DIV = 5e-3
+AUTOSET_PERIODS_ON_SCREEN = 2
+# Sem frequência confiável na escala de busca (rápida demais para a taxa dela),
+# o autoset mede de novo nesta escala, com a taxa máxima.
+AUTOSET_FAST_TIME_PER_DIV = 20e-6
+AUTOSET_MIN_SAMPLES_PER_PERIOD = 10
 DEFAULT_VOLTS_PER_DIV = 1.0
 DEFAULT_TIME_PER_DIV = 200e-6
 TRIGGER_MODES = (("Auto", "auto"), ("Normal", "normal"), ("Único", "single"))
@@ -265,6 +279,13 @@ class MainWindow(QMainWindow):
         self._spectrum_plot = SpectrumPlot()
         self._spectrum_plot.hide()
         self._fft_fit_pending = False
+        # Média: soma corrida dos traços alinhados pelo disparo.
+        self._average: list[np.ndarray] | None = None
+        self._average_trigger = 0.0
+        self._average_count = 0
+        # Autoset em andamento: etapa (1 = procurando, 2 = refinando) e quadros a pular.
+        self._autoset_stage = 0
+        self._autoset_skip = 0
         self._screens = QStackedWidget()
         self._screens.addWidget(self._plot)
         self._screens.addWidget(self._xy_plot)
@@ -326,6 +347,21 @@ class MainWindow(QMainWindow):
         save_image.clicked.connect(self._ask_save_image)
         save_data = QPushButton("Salvar dados…")
         save_data.clicked.connect(self._ask_save_data)
+        autoset = QPushButton("Autoset")
+        autoset.setToolTip("Ajusta escalas, posição, tempo/div e trigger a partir dos sinais")
+        autoset.clicked.connect(self.start_autoset)
+        self._average_n = QComboBox()
+        for count in AVERAGE_COUNTS:
+            self._average_n.addItem("Desligada" if count == 1 else f"{count} capturas", count)
+        self._average_n.setToolTip(
+            "Média das capturas alinhadas pelo disparo: reduz o ruído de um sinal repetitivo"
+        )
+        self._average_n.currentIndexChanged.connect(self._on_settings_changed)
+        acquisition = QGroupBox("Aquisição")
+        acquisition_form = QFormLayout(acquisition)
+        acquisition_form.addRow(autoset)
+        acquisition_form.addRow("Média", self._average_n)
+
         save = QGroupBox("Salvar a tela")
         save_layout = QHBoxLayout(save)
         save_layout.addWidget(save_image)
@@ -358,6 +394,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(source)
         layout.addWidget(self._run_button)
         layout.addWidget(self._pause_button)
+        layout.addWidget(acquisition)
         layout.addWidget(save)
         layout.addWidget(timebase)
         for channel in self._channels:
@@ -519,9 +556,15 @@ class MainWindow(QMainWindow):
     def _build_measurement_group(self) -> QGroupBox:
         self._measurements_on = QCheckBox("Mostrar no gráfico")
         self._measurements_on.setChecked(True)
-        self._measurements_on.toggled.connect(self._update_measurements)
+        self._measure_pulses = QCheckBox("Pulsos: ciclo, larguras, subida e descida")
+        self._measure_delay = QCheckBox("Atraso e fase do CH2 em relação ao CH1")
         group = QGroupBox("Medições")
-        QVBoxLayout(group).addWidget(self._measurements_on)
+        layout = QVBoxLayout(group)
+        for checkbox in (self._measurements_on, self._measure_pulses, self._measure_delay):
+            checkbox.toggled.connect(self._update_measurements)
+            layout.addWidget(checkbox)
+        for checkbox in (self._measure_pulses, self._measure_delay):
+            checkbox.setStyleSheet("QCheckBox { margin-left: 16px; }")
         return group
 
     # Execução
@@ -650,11 +693,18 @@ class MainWindow(QMainWindow):
         if self._pause_button.isChecked():
             return
         traces = self._process(frame)
+        if self._autoset_stage:
+            self._autoset_step(frame, traces)
+            return
         trigger_at = self._find_trigger(frame.sample_rate, traces)
         mode = self._trigger_mode.currentData()
         if trigger_at is None and mode != "auto":
             self._trigger_status.setText("Aguardando disparo")
             return
+        if trigger_at is not None and self._average_n.currentData() > 1:
+            traces, trigger_at = self._accumulate_average(traces, trigger_at)
+        else:
+            self._average = None
 
         self._last_frame = frame
         self._traces = traces
@@ -723,6 +773,124 @@ class MainWindow(QMainWindow):
         self._redraw()
         self._update_scale_label()
         self._trigger_status.setText("Modo roll (sem trigger)")
+
+    # Média e autoset
+
+    def _accumulate_average(self, traces: list[np.ndarray], trigger_at: float) -> tuple[list[np.ndarray], float]:
+        """Soma a captura à média, deslocada para o disparo cair no mesmo lugar.
+
+        Até juntar N capturas é a média simples; depois, cada nova pesa 1/N e
+        as antigas vão saindo aos poucos (média exponencial).
+        """
+        limit = self._average_n.currentData()
+        if self._average is None or self._average[0].shape != traces[0].shape:
+            self._average = [trace.copy() for trace in traces]
+            self._average_trigger = trigger_at
+            self._average_count = 1
+        else:
+            shift = round(trigger_at - self._average_trigger)
+            self._average_count = min(self._average_count + 1, limit)
+            for average, trace in zip(self._average, traces):
+                aligned = np.full(trace.shape, np.nan)
+                source = trace[max(0, shift) : trace.size + min(0, shift)]
+                aligned[max(0, -shift) : max(0, -shift) + source.size] = source
+                valid = np.isfinite(aligned) & np.isfinite(average)
+                average[valid] += (aligned[valid] - average[valid]) / self._average_count
+        return [average.copy() for average in self._average], self._average_trigger
+
+    def start_autoset(self) -> None:
+        """Procura os sinais com escalas largas e depois ajusta tudo a eles."""
+        self._autoset_stage = 1
+        self._autoset_skip = AUTOSET_SKIP_FRAMES
+        self._average = None
+        self._trigger_status.setText("Autoset…")
+        self._trigger_mode.setCurrentIndex(self._trigger_mode.findData("auto"))
+        self._trigger_x = HORIZONTAL_DIVS / 2
+        largest = VOLTS_PER_DIV[-1]
+        for channel in self._channels:
+            channel.volts_per_div.blockSignals(True)
+            channel.volts_per_div.setCurrentIndex(VOLTS_PER_DIV.index(largest))
+            channel.volts_per_div.blockSignals(False)
+        self._time_per_div.blockSignals(True)
+        self._time_per_div.setCurrentIndex(TIME_PER_DIV.index(AUTOSET_SEARCH_TIME_PER_DIV))
+        self._time_per_div.blockSignals(False)
+        self._on_settings_changed()
+        if not self._run_button.isChecked():
+            self.start()
+
+    def _autoset_step(self, frame: Frame, traces: list[np.ndarray]) -> None:
+        if self._autoset_skip > 0:
+            self._autoset_skip -= 1
+            return
+        found = []
+        for i, (raw, trace) in enumerate(zip(frame.channels, traces)):
+            m = measure(trace, frame.sample_rate)
+            if float(raw.max() - raw.min()) >= AUTOSET_MIN_VPP:
+                found.append((i, m))
+        if not found:
+            self._autoset_stage = 0
+            self._time_per_div.setCurrentIndex(TIME_PER_DIV.index(1e-3))
+            self._trigger_status.setText("Autoset: nenhum sinal encontrado")
+            return
+
+        for i, m in found:
+            self._autoset_channel(i, m, frame)
+        source, reference = next(((i, m) for i, m in found if m.frequency), found[0])
+        old_tdiv = self._tdiv()
+        reliable = (
+            reference.frequency is not None
+            and reference.frequency * AUTOSET_MIN_SAMPLES_PER_PERIOD <= frame.sample_rate
+        )
+        if self._autoset_stage == 1 and not reliable:
+            tdiv = AUTOSET_FAST_TIME_PER_DIV
+        elif reference.frequency:
+            wanted = AUTOSET_PERIODS_ON_SCREEN / (HORIZONTAL_DIVS * reference.frequency)
+            candidates = [t for t in TIME_PER_DIV if not is_roll(t) and t >= wanted]
+            tdiv = candidates[0] if candidates else max(t for t in TIME_PER_DIV if not is_roll(t))
+        else:
+            tdiv = 1e-3  # Nível contínuo: qualquer escala serve.
+        self._trigger_source.setCurrentIndex(self._trigger_source.findData(source))
+        self._trigger_edge.setCurrentIndex(0)
+        self._trigger_level.setValue((reference.vmax + reference.vmin) / 2)
+        self._time_per_div.setCurrentIndex(TIME_PER_DIV.index(tdiv))
+        # Na escala de busca, uma frequência alta pode ter sido mal medida: a
+        # segunda passada mede de novo na escala nova e corrige.
+        if self._autoset_stage == 1 and tdiv != old_tdiv:
+            self._autoset_stage = 2
+            self._autoset_skip = AUTOSET_SKIP_FRAMES
+        else:
+            self._autoset_stage = 0
+            self._trigger_status.setText("Autoset concluído")
+
+    def _autoset_channel(self, index: int, m, frame: Frame) -> None:
+        """Volts/div para o sinal ocupar ~6 divisões sem saturar a entrada, e centrado.
+
+        A posição vai até 4 divisões: um nível contínuo maior que isso obriga a
+        uma escala mais larga (ou ao acoplamento AC).
+        """
+        channel = self._channels[index]
+        probe = channel.settings().probe
+        peak_input = max(abs(m.vmax), abs(m.vmin)) / probe
+        half = VERTICAL_DIVS / 2
+
+        def position(vdiv: float) -> float:
+            return round(max(-half, min(half, -(m.vmax + m.vmin) / 2 / vdiv)), 1)
+
+        def on_screen(vdiv: float) -> bool:
+            p = position(vdiv)
+            return m.vmax / vdiv + p <= half and m.vmin / vdiv + p >= -half
+
+        fitting = [
+            v
+            for v in VOLTS_PER_DIV
+            if v * probe * AUTOSET_SCREEN_DIVS >= m.vpp
+            and on_screen(v * probe)
+            and (channel.is_ac() or self._backend.full_scale(v) >= peak_input * AUTOSET_HEADROOM)
+        ]
+        base = fitting[0] if fitting else VOLTS_PER_DIV[-1]
+        channel.volts_per_div.setCurrentIndex(VOLTS_PER_DIV.index(base))
+        channel.position.setValue(position(base * probe))
+        channel.enabled.setChecked(True)
 
     def _on_failed(self, message: str) -> None:
         self.stop()
@@ -880,6 +1048,7 @@ class MainWindow(QMainWindow):
         return (x_divs - origin) * self._tdiv()
 
     def _on_settings_changed(self) -> None:
+        self._average = None
         roll = self._is_roll()
         if not roll:
             limit = max_offscreen_divs(self._tdiv(), self._rates())
@@ -967,6 +1136,7 @@ class MainWindow(QMainWindow):
 
     def _sync_trigger_line(self) -> None:
         """Posiciona a linha do nível conforme o valor em volts e a escala da fonte."""
+        self._average = None  # Outro nível desloca o ponto de alinhamento.
         source = self._trigger_source.currentData()
         self._trigger_level.setSingleStep(TRIGGER_HYSTERESIS_DIVS * self._vdiv(source))
         self._syncing_trigger_line = True
@@ -1074,13 +1244,52 @@ class MainWindow(QMainWindow):
             unit = self._trace_unit(index)
             frequency = format_si(m.frequency, "Hz") if m.frequency else "—"
             period = format_si(m.period, "s") if m.period else "—"
+            name = f'<span style="color:{self._trace_color(index)}">{self._trace_name(index)}</span>'
             rows.append(
-                f'<span style="color:{self._trace_color(index)}">{self._trace_name(index)}</span>'
-                f"&nbsp; f {frequency} &nbsp; T {period} &nbsp; Vpp {format_si(m.vpp, unit)}"
+                f"{name}&nbsp; f {frequency} &nbsp; T {period} &nbsp; Vpp {format_si(m.vpp, unit)}"
                 f" &nbsp; Vmín {format_si(m.vmin, unit)} &nbsp; Vmáx {format_si(m.vmax, unit)}"
                 f" &nbsp; Vméd {format_si(m.vmean, unit)} &nbsp; RMS {format_si(m.vrms, unit)}"
             )
-        self._plot.set_overlay_text(self._measurement_readout, "<br>".join(rows))
+            if self._measure_pulses.isChecked() and finite.all():
+                rows.append(self._pulse_row(index, values, frame.sample_rate, min_vpp))
+        if self._measure_delay.isChecked():
+            rows.append(self._delay_row(visible, frame.sample_rate))
+        self._plot.set_overlay_text(self._measurement_readout, "<br>".join(r for r in rows if r))
+
+    def _pulse_row(self, index: int, values: np.ndarray, sample_rate: float, min_amplitude: float) -> str:
+        t = measure_timing(values, sample_rate, min_amplitude)
+
+        def seconds(value: float | None) -> str:
+            return format_si(value, "s") if value is not None else "—"
+
+        duty = f"{100 * t.duty_cycle:.1f}%" if t.duty_cycle is not None else "—"
+        indent = "&nbsp;" * (len(self._trace_name(index)) + 1)
+        return (
+            f"{indent} ciclo {duty} &nbsp; larg+ {seconds(t.width_positive)}"
+            f" &nbsp; larg− {seconds(t.width_negative)} &nbsp; subida {seconds(t.rise_time)}"
+            f" &nbsp; descida {seconds(t.fall_time)}"
+        )
+
+    def _delay_row(self, visible: np.ndarray, sample_rate: float) -> str:
+        label = "CH1→CH2"
+        if len(self._traces) < 2:
+            return ""
+        a, b = self._traces[0][visible], self._traces[1][visible]
+        if not (np.isfinite(a).all() and np.isfinite(b).all()) or a.size < 3:
+            return f"{label} &nbsp; atraso — &nbsp; fase —"
+        period = measure(a, sample_rate, MIN_VPP_FOR_FREQUENCY_DIVS * self._vdiv(0)).period
+        result = measure_delay(
+            a,
+            b,
+            sample_rate,
+            period,
+            min_amplitude=MIN_VPP_FOR_FREQUENCY_DIVS * min(self._vdiv(0), self._vdiv(1)),
+        )
+        if result is None:
+            return f"{label} &nbsp; atraso — &nbsp; fase —"
+        delay, phase = result
+        phase_text = f"{phase:.1f}°" if phase is not None else "—"
+        return f"{label} &nbsp; atraso {format_si(delay, 's')} &nbsp; fase {phase_text}"
 
     # Salvar
 
@@ -1344,6 +1553,10 @@ class MainWindow(QMainWindow):
         if self._math_operation.currentData() is not None:
             scale = format_si(self._math_scale.currentData(), self._math_unit())
             parts.append(f"MATH {self._math_operation.currentText()} {scale}/div")
+        average = self._average_n.currentData()
+        if average > 1 and not self._is_roll():
+            count = self._average_count if self._average is not None else 0
+            parts.append(f"média {count}/{average}")
         if self._worker is not None and len(self._frame_times) > 1:
             elapsed = self._frame_times[-1] - self._frame_times[0]
             if elapsed > 0:

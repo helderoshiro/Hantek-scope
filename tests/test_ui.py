@@ -8,7 +8,7 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
 from hantek_scope.acquisition.base import CaptureConfig, Frame
-from hantek_scope.acquisition.simulator import SimulatedScope
+from hantek_scope.acquisition.simulator import SimulatedScope, SimulatedSignal
 from hantek_scope.ui.main_window import MainWindow, format_si
 from hantek_scope.ui.worker import AcquisitionWorker
 
@@ -801,3 +801,91 @@ def test_saved_image_includes_the_fft(qapp, tmp_path):
         assert window._spectrum_plot.height() > 100
     finally:
         window.close()
+
+
+# Média, autoset e medições de pulsos e atraso
+
+
+def test_average_reduces_noise_and_resets_on_changes(qapp):
+    noisy = (SimulatedSignal("sine", 1_000, 2.0, noise_rms=0.2), SimulatedSignal("square", 2_500, 1.0))
+    window = MainWindow([SimulatedScope(noisy, seed=1)])
+    window._average_n.setCurrentIndex(window._average_n.findData(16))
+    window.start()
+    try:
+        assert wait_until(lambda: window._average_count >= 8, timeout_ms=8000)
+    finally:
+        window.stop()
+    x = window._display_x(window._last_frame)
+    visible = window._visible_samples(window._last_frame)
+    t = window._time_at(x[visible])
+    residual = window._traces[0][visible] - 2 * np.sin(2 * np.pi * 1e3 * t)
+    # Ruído de 0,2 V RMS; com 8 ou mais capturas, cai a menos da metade.
+    assert residual.std() < 0.1
+    assert "média" in window._scale_label.text()
+    window._channels[0].volts_per_div.setCurrentIndex(3)
+    assert window._average is None
+
+
+def test_autoset_finds_scales_timebase_and_trigger(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(10e-6))
+    for channel in window._channels:
+        channel.volts_per_div.setCurrentIndex(0)
+        channel.position.setValue(3)
+    window._trigger_level.setValue(4.0)
+    window.start_autoset()
+    try:
+        assert wait_until(lambda: window._autoset_stage == 0, timeout_ms=8000)
+    finally:
+        window.stop()
+    assert window._trigger_status.text() in ("Autoset concluído", "Parado")
+    # CH1: seno de 4 Vpp -> 1 V/div; CH2: quadrada de 2 Vpp -> 0,5 V/div.
+    assert window._vdiv(0) == 1.0
+    assert window._vdiv(1) == 0.5
+    assert window._channels[0].position.value() == pytest.approx(0, abs=0.1)
+    # Dois períodos de 1 kHz na tela: 200 µs/div.
+    assert window._tdiv() == pytest.approx(200e-6)
+    assert window._trigger_source.currentData() == 0
+    assert window._trigger_level.value() == pytest.approx(0, abs=0.1)
+
+
+def test_autoset_keeps_a_dc_level_inside_the_input_range(qapp):
+    signals = (SimulatedSignal("square", 1_000, 0.2, offset=4.0), SimulatedSignal("sine", 1_000, 0.0))
+    window = MainWindow([SimulatedScope(signals, seed=1)])
+    window.start_autoset()
+    try:
+        assert wait_until(lambda: window._autoset_stage == 0, timeout_ms=8000)
+    finally:
+        window.stop()
+    # 0,4 Vpp caberia em 0,1 V/div, mas a posição só desce 4 divisões: para
+    # trazer os 4 V de contínuo para a tela, a escala vai a 1 V/div.
+    assert window._vdiv(0) == 1.0
+    assert window._channels[0].position.value() == pytest.approx(-4.0)
+
+
+def test_autoset_without_signal_says_so(qapp):
+    quiet = (SimulatedSignal("sine", 1_000, 0.0), SimulatedSignal("sine", 1_000, 0.0))
+    window = MainWindow([SimulatedScope(quiet, seed=1)])
+    window.start_autoset()
+    try:
+        assert wait_until(lambda: window._autoset_stage == 0, timeout_ms=8000)
+    finally:
+        window.stop()
+    assert window._trigger_status.text() in ("Autoset: nenhum sinal encontrado", "Parado")
+    assert window._tdiv() == pytest.approx(1e-3)
+
+
+def test_pulse_and_delay_rows(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    t = np.arange(4001) / 1e6
+    phase = (t * 2e3) % 1.0
+    ch1 = np.where(phase < 0.25, 2.0, 0.0)  # 2 kHz, 25%.
+    ch2 = np.where(((t - 50e-6) * 2e3) % 1.0 < 0.25, 2.0, 0.0)  # 50 µs depois: 36°.
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(500e-6))
+    show_frame(window, ch1, ch2)
+    window._measure_pulses.setChecked(True)
+    window._measure_delay.setChecked(True)
+    text = window._measurement_readout.text().replace("&nbsp;", " ")
+    assert "ciclo 25.0%" in text
+    assert "larg+ 125 µs" in text
+    assert re.search(r"CH1→CH2\s+atraso 50 µs\s+fase 36.0°", text)

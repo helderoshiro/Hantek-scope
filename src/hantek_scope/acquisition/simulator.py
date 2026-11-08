@@ -49,6 +49,9 @@ class SimulatedScope:
         self._time_s = 0.0
         self._last_read = 0.0
 
+    def full_scale(self, volts_per_div: float) -> float:
+        return FULL_SCALE_V
+
     def open(self) -> None:
         self._last_read = time.monotonic()
 

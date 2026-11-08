@@ -38,6 +38,10 @@ class ScopeBackend(Protocol):
     sample_rates: tuple[float, ...]  # Com todos os canais.
     single_channel_rates: tuple[float, ...]  # Só com o CH1.
 
+    def full_scale(self, volts_per_div: float) -> float:
+        """Maior tensão de entrada, em módulo, que não satura nesta escala."""
+        ...
+
     def open(self) -> None: ...
 
     def close(self) -> None: ...

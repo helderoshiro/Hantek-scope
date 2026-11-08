@@ -70,6 +70,9 @@ class Hantek6022Backend:
         self._streaming = False
         self._stream_buffer = bytearray()
 
+    def full_scale(self, volts_per_div: float) -> float:
+        return 5.0 / range_index_for(volts_per_div)
+
     def is_connected(self) -> bool:
         try:
             scope = self._scope_factory()
