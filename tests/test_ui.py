@@ -723,3 +723,81 @@ def test_save_data_in_roll_mode_uses_time_to_the_newest_sample(qapp, tmp_path):
     assert any("Modo roll" in line for line in lines if line.startswith("#"))
     last = lines[-1].split(",")
     assert float(last[0]) == pytest.approx(0, abs=1e-4)
+
+
+# FFT e modo XY
+
+
+def sine_frame(window, frequency=5e3, amplitude=1.0, n=2001, rate=1e6):
+    t = np.arange(n) / rate
+    show_frame(window, amplitude * np.sin(2 * np.pi * frequency * t), 0.5 * np.cos(2 * np.pi * frequency * t))
+
+
+def test_fft_shows_the_peak_of_the_visible_signal(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    sine_frame(window)
+    window._fft_window.setCurrentIndex(window._fft_window.findData("flattop"))
+    window._fft_on.setChecked(True)
+    assert window._spectrum_plot.isVisibleTo(window)
+    text = window._spectrum_plot.readout.text()
+    match = re.search(r"pico ([\d.]+) kHz\s+(-?[\d.]+) dBV", text)
+    assert float(match.group(1)) == pytest.approx(5.0, abs=0.01)
+    # 1 V de pico = 0,707 V RMS = -3 dBV.
+    assert match.group(2) == "-3.0"
+    assert "resolução 499.8 Hz" in text  # 2 ms visíveis.
+
+
+def test_fft_linear_scale_and_math_source(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    sine_frame(window)
+    window._math_operation.setCurrentIndex(window._math_operation.findData("mul"))
+    window._fft_on.setChecked(True)
+    window._fft_source.setCurrentIndex(window._fft_source.findData(2))
+    window._fft_scale.setCurrentIndex(1)
+    text = window._spectrum_plot.readout.text()
+    # sen × cos tem o dobro da frequência.
+    assert "MATH" in text
+    assert "pico 10 kHz" in text
+    assert "V² RMS" in text
+
+
+def test_fft_of_a_disabled_trace_is_empty(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    sine_frame(window)
+    window._fft_on.setChecked(True)
+    window._fft_source.setCurrentIndex(window._fft_source.findData(2))  # MATH desligado.
+    assert window._spectrum_plot.readout.text() == ""
+
+
+def test_xy_mode_plots_ch2_against_ch1(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._channels[1].enabled.setChecked(False)
+    assert window._current_config().channels == 1
+    window._xy_mode.setChecked(True)
+    assert window._screens.currentWidget() is window._xy_plot
+    assert window._current_config().channels == 2  # O XY precisa do CH2.
+    sine_frame(window)
+    x, y = window._xy_plot._curve.getData()
+    assert x.max() == pytest.approx(1.0, abs=0.01)  # 1 V a 1 V/div.
+    assert y.max() == pytest.approx(0.5, abs=0.01)
+    labels = dict(window._xy_plot.getAxis("bottom")._tickLevels[0])
+    assert labels[5] == "5 V"
+    window._xy_mode.setChecked(False)
+    assert window._screens.currentWidget() is window._plot
+
+
+def test_saved_image_includes_the_fft(qapp, tmp_path):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window.resize(1200, 900)
+    window.show()
+    try:
+        sine_frame(window)
+        window._fft_on.setChecked(True)
+        qapp.processEvents()
+        path = tmp_path / "fft.png"
+        window.save_image(path)
+        image = QImage(str(path))
+        assert image.height() == window._display.height() + 26
+        assert window._spectrum_plot.height() > 100
+    finally:
+        window.close()

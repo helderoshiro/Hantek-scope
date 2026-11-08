@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -41,6 +43,7 @@ from hantek_scope.processing.channel import (
 )
 from hantek_scope.processing.math_channel import OPERATIONS, combine
 from hantek_scope.processing.measurements import measure
+from hantek_scope.processing.spectrum import find_peak, spectrum
 from hantek_scope.processing.trigger import find_trigger
 from hantek_scope.timebase import (
     CAPTURE_DIVS,
@@ -53,7 +56,9 @@ from hantek_scope.timebase import (
     max_offscreen_divs,
     roll_plan,
 )
+from hantek_scope.ui.analysis_plots import SpectrumPlot, XYPlot
 from hantek_scope.ui.scope_plot import BACKGROUND, CURSOR_COLOR, ScopePlot
+from hantek_scope.ui.units import format_si
 from hantek_scope.ui.worker import AcquisitionWorker
 
 CHANNEL_COLORS = ("#f2c94c", "#56ccf2", "#6fcf97", "#eb5757")
@@ -70,6 +75,13 @@ MAINS_MIN_TIME_PER_DIV = min(
     t for t in TIME_PER_DIV if CAPTURE_DIVS * t >= MIN_MAINS_CYCLES / MAINS_HZ
 )
 MATH_CSV_COLUMNS = {"V": "MATH_V", "V²": "MATH_V2", "V/V": "MATH_VporV"}
+FFT_WINDOWS = (
+    ("Hann", "hann"),
+    ("Flat top (amplitude)", "flattop"),
+    ("Blackman-Harris", "blackmanharris"),
+    ("Retangular", "rect"),
+)
+MIN_FFT_SAMPLES = 16
 DEFAULT_VOLTS_PER_DIV = 1.0
 DEFAULT_TIME_PER_DIV = 200e-6
 TRIGGER_MODES = (("Auto", "auto"), ("Normal", "normal"), ("Único", "single"))
@@ -82,16 +94,6 @@ VOLT_CURSOR_SLOTS = (1, -1, 2, -2, 3, -3)
 CSV_FILTER = "CSV (*.csv)"
 CSV_PTBR_FILTER = "CSV para Excel em português (*.csv)"
 IMAGE_FOOTER_HEIGHT = 26
-
-
-def format_si(value: float, unit: str) -> str:
-    if value == 0:
-        return f"0 {unit}"
-    for scale, prefix in ((1e6, "M"), (1e3, "k"), (1, ""), (1e-3, "m"), (1e-6, "µ")):
-        # Compara já arredondado, para 999,97 virar "1 k" e não "1000".
-        if abs(float(f"{value / scale:.4g}")) >= 1:
-            return f"{value / scale:.4g} {prefix}{unit}"
-    return f"{value / 1e-9:.4g} n{unit}"
 
 
 class ChannelControls(QGroupBox):
@@ -259,9 +261,23 @@ class MainWindow(QMainWindow):
             curve.setDownsampling(auto=True, method="peak")
             curve.setClipToView(True)
 
+        self._xy_plot = XYPlot(CHANNEL_COLORS[0], CHANNEL_COLORS[1])
+        self._spectrum_plot = SpectrumPlot()
+        self._spectrum_plot.hide()
+        self._fft_fit_pending = False
+        self._screens = QStackedWidget()
+        self._screens.addWidget(self._plot)
+        self._screens.addWidget(self._xy_plot)
+        # Área mostrada e salva como imagem: a tela principal e, abaixo, a FFT.
+        self._display = QSplitter(Qt.Orientation.Vertical)
+        self._display.addWidget(self._screens)
+        self._display.addWidget(self._spectrum_plot)
+        self._display.setStretchFactor(0, 3)
+        self._display.setStretchFactor(1, 2)
+
         central = QWidget()
         layout = QHBoxLayout(central)
-        layout.addWidget(self._plot, stretch=1)
+        layout.addWidget(self._display, stretch=1)
         layout.addWidget(self._build_side_panel())
         self.setCentralWidget(central)
 
@@ -347,6 +363,7 @@ class MainWindow(QMainWindow):
         for channel in self._channels:
             layout.addWidget(channel)
         layout.addWidget(self._build_math_group())
+        layout.addWidget(self._build_analysis_group())
         layout.addWidget(self._build_trigger_group())
         layout.addWidget(self._build_cursor_group())
         layout.addWidget(self._build_measurement_group())
@@ -393,6 +410,50 @@ class MainWindow(QMainWindow):
         form.addRow("Escala/div", self._math_scale)
         form.addRow("Posição", self._math_position)
         form.addRow(self._math_fit)
+        return group
+
+    def _build_analysis_group(self) -> QGroupBox:
+        self._xy_mode = QCheckBox("Modo XY (CH1 × CH2)")
+        self._xy_mode.setToolTip("CH1 na horizontal e CH2 na vertical, como em uma figura de Lissajous")
+        self._xy_mode.toggled.connect(self._on_xy_toggled)
+
+        self._fft_on = QCheckBox("FFT")
+        self._fft_on.setToolTip("Espectro do trecho visível na tela")
+        self._fft_on.toggled.connect(self._on_fft_toggled)
+        self._fft_source = QComboBox()
+        for i in range(self._n_traces):
+            self._fft_source.addItem(self._trace_name(i), i)
+        self._fft_window = QComboBox()
+        for label, key in FFT_WINDOWS:
+            self._fft_window.addItem(label, key)
+        self._fft_window.setToolTip(
+            "Hann: uso geral. Flat top: lê a amplitude certa, com picos largos.\n"
+            "Blackman-Harris: vê componentes fracos perto de fortes. Retangular: sem janela."
+        )
+        self._fft_scale = QComboBox()
+        self._fft_scale.addItem("dB", True)
+        self._fft_scale.addItem("Linear (RMS)", False)
+        self._fft_log = QCheckBox("Frequência em escala log")
+        # Em escala linear, um sinal de áudio fica espremido no canto: a FFT vai até
+        # a metade da taxa, que costuma ser milhares de vezes maior.
+        self._fft_log.setChecked(True)
+        fit = QPushButton("Ajustar FFT")
+        fit.setToolTip("Enquadra o espectro; no gráfico, roda e arrasto dão zoom")
+        fit.clicked.connect(self._spectrum_plot.fit)
+        for combo in (self._fft_source, self._fft_scale):
+            combo.currentIndexChanged.connect(self._refit_fft)
+        self._fft_window.currentIndexChanged.connect(self._update_spectrum)
+        self._fft_log.toggled.connect(self._refit_fft)
+
+        group = QGroupBox("Análise")
+        form = QFormLayout(group)
+        form.addRow(self._xy_mode)
+        form.addRow(self._fft_on)
+        form.addRow("Fonte", self._fft_source)
+        form.addRow("Janela", self._fft_window)
+        form.addRow("Escala", self._fft_scale)
+        form.addRow(self._fft_log)
+        form.addRow(fit)
         return group
 
     def _build_trigger_group(self) -> QGroupBox:
@@ -501,6 +562,7 @@ class MainWindow(QMainWindow):
             return True
         return (
             not self._enabled(1)
+            and not self._xy_mode.isChecked()
             and self._math_operation.currentData() is None
             and self._trigger_source.currentData() == 0
         )
@@ -569,6 +631,7 @@ class MainWindow(QMainWindow):
         for curve in [*self._curves, self._math_curve]:
             curve.setData([], [])
         self._update_measurements()
+        self._update_analysis()
 
     def _matches_config(self, frame: Frame, config: CaptureConfig) -> bool:
         """Descarta quadros lidos antes da última mudança de configuração."""
@@ -1053,7 +1116,7 @@ class MainWindow(QMainWindow):
 
     def save_image(self, path: Path) -> None:
         """Salva o gráfico com uma faixa de rodapé com as escalas e a data."""
-        plot = self._plot.grab()
+        plot = self._display.grab()
         image = QPixmap(plot.width(), plot.height() + IMAGE_FOOTER_HEIGHT)
         image.fill(QColor(BACKGROUND))
         painter = QPainter(image)
@@ -1178,6 +1241,87 @@ class MainWindow(QMainWindow):
         else:
             self._math_curve.setData(x, self._to_divs(math_index, self._math))
         self._update_measurements()
+        self._update_analysis()
+
+    # Análise: modo XY e FFT
+
+    def _on_xy_toggled(self, on: bool) -> None:
+        self._screens.setCurrentWidget(self._xy_plot if on else self._plot)
+        # O XY precisa dos dois canais, mesmo com o CH2 desligado na tela.
+        self._on_settings_changed()
+
+    def _on_fft_toggled(self, on: bool) -> None:
+        self._spectrum_plot.setVisible(on)
+        if on:
+            # Abre a FFT com 40% da altura, em vez do mínimo que o divisor daria.
+            total = sum(self._display.sizes()) or self._display.height()
+            self._display.setSizes([round(total * 0.6), round(total * 0.4)])
+        self._refit_fft()
+
+    def _refit_fft(self) -> None:
+        self._fft_fit_pending = True
+        self._update_spectrum()
+
+    def _update_analysis(self) -> None:
+        self._update_xy()
+        self._update_spectrum()
+
+    def _update_xy(self) -> None:
+        if not self._xy_mode.isChecked():
+            return
+        half_x, half_y = HORIZONTAL_DIVS // 2, VERTICAL_DIVS // 2
+        self._xy_plot.set_axis_labels(
+            [format_si(self._from_divs(0, i), "V") for i in range(-half_x, half_x + 1)],
+            [format_si(self._from_divs(1, i), "V") for i in range(-half_y, half_y + 1)],
+        )
+        frame = self._last_frame
+        if frame is None or len(self._traces) < 2:
+            self._xy_plot.set_points(np.array([]), np.array([]))
+            return
+        visible = self._visible_samples(frame)
+        self._xy_plot.set_points(
+            self._to_divs(0, self._traces[0][visible]), self._to_divs(1, self._traces[1][visible])
+        )
+
+    def _update_spectrum(self) -> None:
+        if not self._fft_on.isChecked():
+            return
+        frame = self._last_frame
+        index = self._fft_source.currentData()
+        values = self._trace_values(index) if frame is not None else None
+        if values is None or not self._trace_on(index):
+            self._spectrum_plot.clear_spectrum()
+            return
+        values = values[self._visible_samples(frame)]
+        values = values[np.isfinite(values)]
+        if values.size < MIN_FFT_SAMPLES:
+            self._spectrum_plot.clear_spectrum()
+            return
+        window_name = self._fft_window.currentData()
+        spec = spectrum(values, frame.sample_rate, window_name)
+        peak = find_peak(spec, window_name)
+        in_db = self._fft_scale.currentData()
+        unit = self._trace_unit(index)
+        db_unit = "dBV" if unit == "V" else f"dB (1 {unit})"
+        to_display = (lambda v: 20 * np.log10(np.maximum(v, 1e-12))) if in_db else (lambda v: v)
+        summary = f"{self._trace_name(index)}   resolução {format_si(spec.resolution, 'Hz')}"
+        marker = None
+        if peak is not None:
+            level = f"{to_display(peak.vrms):.1f} {db_unit}" if in_db else f"{format_si(peak.vrms, unit)} RMS"
+            summary += f"\npico {format_si(peak.frequency, 'Hz')}   {level}"
+            marker = (peak.frequency, float(to_display(peak.vrms)))
+        self._spectrum_plot.set_spectrum(
+            spec.frequencies,
+            to_display(spec.vrms),
+            self._trace_color(index),
+            db_unit if in_db else f"{unit} RMS",
+            self._fft_log.isChecked(),
+            marker,
+            summary,
+        )
+        if self._fft_fit_pending:
+            self._fft_fit_pending = False
+            self._spectrum_plot.fit()
 
     def _update_source_labels(self) -> None:
         self.setWindowTitle(f"Hantek Scope ({self._backend.name})")
