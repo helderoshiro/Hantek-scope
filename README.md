@@ -78,7 +78,6 @@ instalado, o programa original da Hantek não funciona com o aparelho.
 
 - Taxas maiores com um canal só e tempos por divisão mais lentos
 - FFT, Lissajous (XY), filtros e operações entre canais
-- Exportação de dados
 - Analisador lógico
 
 As mudanças de cada versão ficam no [CHANGELOG](CHANGELOG.md).
