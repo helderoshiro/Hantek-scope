@@ -16,20 +16,27 @@ Objetivo: uso geral, com interface mais amigável e fluida que as alternativas.
 - `src/hantek_scope/timebase.py`: converte tempo por divisão em configuração de
   captura.
 - `src/hantek_scope/processing/`: análise sem Qt (`trigger.py`, `measurements.py`,
-  `channel.py` para ponteira, inversão, filtro de rede e AC, e `math_channel.py`
-  para as operações entre canais).
+  `timing.py` para pulsos e atraso, `channel.py` para ponteira, inversão, filtro
+  de rede e AC, `math_channel.py` para as operações entre canais e `spectrum.py`
+  para a FFT).
 - `src/hantek_scope/export.py`: gravação de CSV, sem Qt.
 - `src/hantek_scope/ui/`: interface; `scope_plot.py` é o gráfico (eixos, cursores,
-  linhas do trigger, roda e posição do mouse) e `worker.py`, a thread de aquisição.
+  linhas do trigger, roda, arrasto e posição do mouse), `analysis_plots.py` traz
+  a FFT e o XY, `units.py` formata valores e `worker.py` é a thread de aquisição.
 
 O gráfico trabalha em divisões (x de 0 a 10, y de -4 a 4). A conversão para
-tempo e tensão fica na `MainWindow`. O tempo exibido é relativo ao disparo.
-A captura cobre `CAPTURE_DIVS` (o dobro da tela) para o trigger ter margem.
+tempo e tensão fica na `MainWindow`. O tempo exibido é relativo ao disparo, que
+fica em `_trigger_x` e pode estar fora da tela. A captura cobre `CAPTURE_DIVS`
+(o dobro da tela) mais a distância do disparo até a tela.
+
+No modo roll (`is_roll`, a partir de 100 ms/div), o worker entrega todos os
+quadros (`take_frames`), o backend lê em fluxo contínuo (`CaptureConfig.stream`)
+e a `MainWindow` emenda os trechos pelos horários (`Frame.end_time`).
 
 Regras:
 
-- A thread de aquisição nunca toca em widgets. Ela guarda só o quadro mais
-  recente, e a interface o busca, descartando quadros se estiver atrasada.
+- A thread de aquisição nunca toca em widgets. Fora do roll, a interface pega só
+  o quadro mais recente e descarta os outros se estiver atrasada.
 - Os dados de `Frame` estão sempre em volts na entrada do aparelho,
   independentemente do backend. A `MainWindow` guarda o quadro original e os
   traços condicionados (`_traces`, `_math`), refeitos a cada ajuste.
@@ -41,8 +48,16 @@ Regras:
 Validado com o 6022BL real (Windows 11, firmware 0x0210, 2026-11-08):
 
 - Captura correta do sinal de calibração (1 kHz, 0 a 2 V) e calibração da EEPROM.
-- Dois canais sem perda de amostras até 8 MS/s. De 10 a 16 MS/s a perda varia
-  entre execuções; a partir de 24 MS/s sempre há perda, a partir de ~6.000 amostras.
+- Dois canais sem perda de amostras até 8 MS/s na maioria das execuções. De 10 a
+  16 MS/s a perda varia entre execuções; a partir de 24 MS/s sempre há perda, a
+  partir de ~6.000 amostras.
+- Em 2026-11-08 houve períodos com perda até em 1 a 6 MS/s, que sumiram minutos
+  depois sem mudança no código: depende do estado do PC ou do USB. Investigar
+  transferências assíncronas ou a política RAW_IO do WinUSB.
+- Modo roll com leitura contínua: 20 mil pontos por tela sem lacuna, sinal de
+  calibração medido em 1 kHz.
+- Um canal a 16 MS/s funciona, mas a perda de amostras não foi medida (o sinal
+  de calibração precisa estar no CH1).
 - O início das leituras não mostrou amostras ruins.
 - Com o firmware aberto, o aparelho vira outra instância USB (`DSO-6022BL`, com
   número de série) e precisa de WinUSB próprio. O driver da Hantek, se instalado,

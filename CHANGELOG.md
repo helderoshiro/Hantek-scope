@@ -5,6 +5,25 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+### Adicionado
+
+- Zoom pela roda no ponto do mouse e arrasto horizontal do traço. O disparo pode
+  ficar fora da tela, indicado por uma seta, e "Disparo ao centro" o traz de volta.
+- Tempos de 20 ms a 10 s/div; a partir de 100 ms/div, modo roll com captura
+  contínua, sem lacunas entre as leituras.
+- Taxas de até 16 MS/s quando só o CH1 é necessário.
+- FFT do trecho visível, com janelas Hann, flat top, Blackman-Harris e
+  retangular, escala em dB ou linear e eixo de frequência linear ou log.
+- Modo XY (CH2 contra CH1).
+- Média de 2 a 128 capturas alinhadas pelo disparo.
+- Autoset de escalas, posição, tempo/div e trigger.
+- Medições de ciclo de trabalho, larguras de pulso, subida, descida e atraso e
+  fase entre os canais.
+
+### Alterado
+
+- A imagem salva inclui a FFT, quando ela está aberta.
+
 ## [0.4.0] - 2026-11-08
 
 ### Adicionado
