@@ -40,6 +40,7 @@ class ScopePlot(pg.PlotWidget):
         self.trigger_level = self._line(0, 0, "T", channel_colors[0], 0.02)
         self.time_cursors: list[pg.InfiniteLine] = []
         self.volt_cursors: list[pg.InfiniteLine] = []
+        self._zero_markers: dict[str, pg.TextItem] = {}
 
         # Leituras sobre o gráfico: cursores no alto e medições embaixo.
         self.cursor_readout = self._overlay()
@@ -63,6 +64,26 @@ class ScopePlot(pg.PlotWidget):
     def set_line_color(self, line: pg.InfiniteLine, color: str) -> None:
         line.setPen(pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
         line.label.setColor(color)
+
+    def set_zero_marker(self, name: str, y_divs: float | None, color: str) -> None:
+        """Marca, na borda esquerda, onde fica o 0 V do traço; None oculta.
+
+        Fora da tela, a marca fica na borda e vira uma seta para cima ou baixo.
+        """
+        marker = self._zero_markers.get(name)
+        if marker is None:
+            marker = pg.TextItem(anchor=(0, 0.5))
+            marker.setZValue(10)
+            self.addItem(marker, ignoreBounds=True)
+            self._zero_markers[name] = marker
+        marker.setVisible(y_divs is not None)
+        if y_divs is None:
+            return
+        arrow = "▲" if y_divs > HALF_DIVS else "▼" if y_divs < -HALF_DIVS else "▶"
+        marker.setText(f"{name}{arrow}", color=color)
+        # Nas bordas, ancora o texto para ele não ficar cortado pela metade.
+        marker.setAnchor((0, 0 if y_divs >= HALF_DIVS else 1 if y_divs <= -HALF_DIVS else 0.5))
+        marker.setPos(0, max(-HALF_DIVS, min(HALF_DIVS, y_divs)))
 
     def add_cursor(self, vertical: bool, pos: float, name: str) -> pg.InfiniteLine:
         """Cursor vertical mede tempo; horizontal mede tensão."""

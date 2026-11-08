@@ -15,7 +15,9 @@ Objetivo: uso geral, com interface mais amigável e fluida que as alternativas.
   (`base.py`). Não pode depender de Qt.
 - `src/hantek_scope/timebase.py`: converte tempo por divisão em configuração de
   captura.
-- `src/hantek_scope/processing/`: análise sem Qt (`trigger.py`, `measurements.py`).
+- `src/hantek_scope/processing/`: análise sem Qt (`trigger.py`, `measurements.py`,
+  `channel.py` para ponteira, inversão, filtro de rede e AC, e `math_channel.py`
+  para as operações entre canais).
 - `src/hantek_scope/export.py`: gravação de CSV, sem Qt.
 - `src/hantek_scope/ui/`: interface; `scope_plot.py` é o gráfico (eixos, cursores,
   linhas do trigger, roda e posição do mouse) e `worker.py`, a thread de aquisição.
@@ -28,7 +30,9 @@ Regras:
 
 - A thread de aquisição nunca toca em widgets. Ela guarda só o quadro mais
   recente, e a interface o busca, descartando quadros se estiver atrasada.
-- Os dados de `Frame` estão sempre em volts, independentemente do backend.
+- Os dados de `Frame` estão sempre em volts na entrada do aparelho,
+  independentemente do backend. A `MainWindow` guarda o quadro original e os
+  traços condicionados (`_traces`, `_math`), refeitos a cada ajuste.
 - Novas análises (FFT, Lissajous, filtros, operações) entram em um pacote
   `processing/` sem Qt, recebendo `Frame` e devolvendo arrays NumPy.
 
@@ -44,8 +48,13 @@ Validado com o 6022BL real (Windows 11, firmware 0x0210, 2026-11-08):
   número de série) e precisa de WinUSB próprio. O driver da Hantek, se instalado,
   ainda carrega o firmware original a cada conexão.
 
-Ainda não verificado: acomodação após trocar o ganho e taxas acima de 8 MS/s com
-um canal só.
+Ainda não verificado: acomodação após trocar o ganho, taxas acima de 8 MS/s com
+um canal só e o filtro de 60 Hz com interferência real da rede (no aparelho, só
+com o sinal de calibração).
+
+O filtro de rede ajusta senos por mínimos quadrados ponderados por uma janela
+de Hann; sem a janela, sinais sem ciclos inteiros na captura vazam alguns por
+cento para o ajuste.
 
 Para medir perdas, usar o sinal de calibração no CH2 e conferir se todos os
 períodos têm 1 ms.

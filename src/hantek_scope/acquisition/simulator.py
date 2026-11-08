@@ -9,6 +9,7 @@ from hantek_scope.acquisition.base import CaptureConfig, Frame
 SAMPLE_RATES = (100e3, 200e3, 500e3, 1e6, 4e6, 8e6, 16e6, 24e6, 48e6)
 FULL_SCALE_V = 5.0
 ADC_LEVELS = 256
+MAINS_HZ = 60.0
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class SimulatedSignal:
     amplitude: float
     offset: float = 0.0
     noise_rms: float = 0.01
+    mains_hum: float = 0.0  # Amplitude de uma interferência de 60 Hz, em volts.
 
 
 DEFAULT_SIGNALS = (
@@ -79,7 +81,8 @@ class SimulatedScope:
         sine = np.sin(2 * np.pi * signal.frequency * t)
         wave = sine if signal.waveform == "sine" else np.where(sine >= 0, 1.0, -1.0)
         noise = self._rng.normal(0.0, signal.noise_rms, t.size)
-        return _quantize(signal.amplitude * wave + signal.offset + noise)
+        hum = signal.mains_hum * np.sin(2 * np.pi * MAINS_HZ * t)
+        return _quantize(signal.amplitude * wave + signal.offset + hum + noise)
 
 
 def _quantize(volts: np.ndarray) -> np.ndarray:

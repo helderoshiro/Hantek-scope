@@ -5,7 +5,7 @@ from hantek_scope.export import write_csv
 
 def test_standard_csv(tmp_path):
     path = tmp_path / "a.csv"
-    write_csv(path, np.array([0.0, 1e-6]), {"CH1": np.array([0.5, -1.25])}, ["Fonte: teste"])
+    write_csv(path, np.array([0.0, 1e-6]), {"CH1_V": np.array([0.5, -1.25])}, ["Fonte: teste"])
     assert path.read_text(encoding="utf-8").splitlines() == [
         "# Fonte: teste",
         "tempo_s,CH1_V",
@@ -19,7 +19,7 @@ def test_excel_ptbr_csv(tmp_path):
     write_csv(
         path,
         np.array([0.0, 0.5]),
-        {"CH1": np.array([0.5, 1.0]), "CH2": np.array([2.25, 0.0])},
+        {"CH1_V": np.array([0.5, 1.0]), "CH2_V": np.array([2.25, 0.0])},
         [],
         excel_ptbr=True,
     )

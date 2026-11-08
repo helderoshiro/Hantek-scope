@@ -383,3 +383,187 @@ def test_wheel_does_not_go_past_the_last_scale(qapp):
     window = MainWindow([SimulatedScope(seed=1)])
     window._on_wheel(-100, Qt.KeyboardModifier.NoModifier)
     assert window._time_per_div.currentIndex() == window._time_per_div.count() - 1
+
+
+# Ponteira, posição, acoplamento, inversão, filtro e MATH
+
+
+def show_frame(window, *channels, rate=1e6):
+    """Põe um quadro na tela sem passar pela aquisição."""
+    window._last_frame = Frame(sample_rate=rate, channels=np.array(channels, dtype=float))
+    window._trigger_at = None
+    window._on_settings_changed()
+
+
+def axis_labels(window, side):
+    return dict(window._plot.getAxis(side)._tickLevels[0])
+
+
+def test_probe_10x_scales_labels_traces_and_trigger(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._trigger_level.setValue(0.5)
+    channel = window._channels[0]
+    channel.probe.setCurrentIndex(channel.probe.findData(10.0))
+    assert channel.volts_per_div.currentText() == "10 V"
+    # A faixa de entrada continua a mesma: só a leitura muda.
+    assert window._current_config().volts_per_div[0] == 1.0
+    assert window._trigger_level.value() == pytest.approx(5.0)
+    assert axis_labels(window, "left")[2] == "20 V"
+    show_frame(window, np.full(2000, 0.3), np.zeros(2000))
+    assert window._traces[0] == pytest.approx(3.0)
+    assert window._curves[0].yData == pytest.approx(0.3)  # 3 V a 10 V/div.
+
+
+def test_position_moves_the_trace_and_the_axis(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._channels[0].position.setValue(2)
+    assert axis_labels(window, "left")[2] == "0 V"
+    assert axis_labels(window, "left")[-2] == "-4 V"
+    show_frame(window, np.full(2000, 1.0), np.zeros(2000))
+    assert window._curves[0].yData == pytest.approx(3.0)
+    marker = window._plot._zero_markers["1"]
+    assert marker.pos().y() == pytest.approx(2)
+
+
+def test_trigger_line_follows_the_position(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._trigger_level.setValue(1.0)
+    window._channels[0].position.setValue(-1)
+    assert window._plot.trigger_level.value() == pytest.approx(0)
+    window._plot.trigger_level.setValue(1)
+    assert window._trigger_level.value() == pytest.approx(2.0)
+
+
+def test_zero_marker_hides_with_its_trace(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._math_operation.setCurrentIndex(window._math_operation.findData("add"))
+    window._math_position.setValue(4)
+    assert window._plot._zero_markers["M"].isVisible()
+    window._math_operation.setCurrentIndex(0)
+    assert not window._plot._zero_markers["M"].isVisible()
+
+
+def test_inverted_channel(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._channels[1].inverted.setChecked(True)
+    show_frame(window, np.zeros(2000), np.full(2000, 0.5))
+    assert window._traces[1] == pytest.approx(-0.5)
+    assert "inv" in window._scale_label.text()
+
+
+def test_ac_coupling_removes_dc_and_picks_the_input_range(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    channel = window._channels[0]
+    channel.volts_per_div.setCurrentIndex(channel.volts_per_div.findData(0.05))
+    channel.coupling.setCurrentIndex(channel.coupling.findData(True))
+    t = np.arange(20_000) / 1e6
+    signal = 3.0 + 0.1 * np.sin(2 * np.pi * 1e3 * t)
+    show_frame(window, signal, np.zeros(t.size))
+    assert window._traces[0].mean() == pytest.approx(0, abs=1e-3)
+    # Os 3 V de contínuo não cabem na faixa de 50 mV/div: ela sobe com o sinal.
+    window._adjust_ac_input_ranges(window._last_frame)
+    assert window._current_config().volts_per_div[0] == 0.1
+    for _ in range(5):
+        window._adjust_ac_input_ranges(window._last_frame)
+    assert window._current_config().volts_per_div[0] == 1.0
+    channel.coupling.setCurrentIndex(channel.coupling.findData(False))
+    assert window._current_config().volts_per_div[0] == 0.05
+
+
+def test_mains_filter_cleans_the_trace(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(2e-3))
+    t = np.arange(40_001) / 1e6
+    clean = np.sin(2 * np.pi * 1e3 * t)
+    hum = 0.5 * np.sin(2 * np.pi * 60 * t + 1)
+    show_frame(window, clean + hum, np.zeros(t.size))
+    window._channels[0].mains_filter.setChecked(True)
+    assert np.abs(window._traces[0] - clean).max() < 1e-3
+    assert not window._channels[0].mains_note.isVisibleTo(window)
+
+
+def test_mains_filter_warns_when_the_capture_is_too_short(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._channels[0].mains_filter.setChecked(True)
+    assert window._channels[0].mains_note.isVisibleTo(window)
+    assert "2 ms/div" in window._channels[0].mains_note.text()
+
+
+def test_math_trace_and_its_measurements(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    t = np.arange(2001) / 1e6
+    ch1 = np.sin(2 * np.pi * 5e3 * t)
+    ch2 = np.full(t.size, 0.5)
+    show_frame(window, ch1, ch2)
+    window._math_operation.setCurrentIndex(window._math_operation.findData("add"))
+    assert window._math == pytest.approx(ch1 + 0.5)
+    # "Ajustar escala": Vpp de 2 V cabe em 6 divisões a 500 mV/div, centrado.
+    assert window._math_scale.currentData() == 0.5
+    assert window._math_position.value() == pytest.approx(-1.0)
+    rows = window._measurement_readout.text().split("<br>")
+    math_row = rows[-1]
+    assert "MATH" in math_row
+    assert measured(math_row, "Vmáx", "V") == pytest.approx(1.5, abs=0.01)
+    assert measured(math_row, "f", "Hz") == pytest.approx(5e3, rel=1e-3)
+    assert "MATH CH1 + CH2 500 mV/div" in window._scale_label.text()
+
+
+def test_math_units_follow_the_operation(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    show_frame(window, np.full(2000, 2.0), np.full(2000, 3.0))
+    window._math_operation.setCurrentIndex(window._math_operation.findData("mul"))
+    assert window._math == pytest.approx(6.0)
+    assert window._math_scale.currentText().endswith("V²")
+    assert "MATH = " in window._position_text(5, 0)
+    assert window._position_text(5, 0).endswith("V²")
+
+
+def test_math_division_leaves_gaps_near_zero(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    ch2 = np.where(np.arange(2000) < 1000, 2.0, 0.0)
+    show_frame(window, np.full(2000, 1.0), ch2)
+    window._math_operation.setCurrentIndex(window._math_operation.findData("div"))
+    assert window._math[:1000] == pytest.approx(0.5)
+    assert np.isnan(window._math[1000:]).all()
+    assert "MATH" in window._measurement_readout.text()
+
+
+def test_volt_cursors_on_the_math_trace(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._cursor_channel.setCurrentIndex(window._cursor_channel.findData(2))
+    window._add_cursor(vertical=False)
+    assert window._cursor_readout.text().splitlines()[-1] == "(MATH desligado)"
+    window._math_operation.setCurrentIndex(window._math_operation.findData("sub"))
+    window._math_scale.setCurrentIndex(window._math_scale.findData(2.0))
+    window._math_position.setValue(1)
+    window._plot.volt_cursors[0].setValue(2)
+    lines = window._cursor_readout.text().splitlines()
+    assert lines[0].split() == ["V1", "2", "V"]
+    assert lines[1] == "(tensão do MATH)"
+
+
+def test_save_data_includes_math_and_channel_settings(qapp, tmp_path):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._channels[0].probe.setCurrentIndex(1)
+    show_frame(window, np.full(20_001, 0.2), np.full(20_001, 1.0))
+    window._math_operation.setCurrentIndex(window._math_operation.findData("mul"))
+    path = tmp_path / "dados.csv"
+    window.save_data(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    header = [line for line in lines if line.startswith("#")]
+    assert any("CH1: 10 V/div, ponteira 10x, acoplamento DC" in line for line in header)
+    assert any(line.startswith("# MATH: CH1 × CH2") for line in header)
+    assert lines[len(header)] == "tempo_s,CH1_V,CH2_V,MATH_V2"
+    first = [float(v) for v in lines[len(header) + 1].split(",")]
+    assert first[1:] == pytest.approx([2.0, 1.0, 2.0])
+
+
+def test_math_turned_on_before_running_fits_on_the_first_frame(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._math_operation.setCurrentIndex(window._math_operation.findData("mul"))
+    window._math_scale.setCurrentIndex(window._math_scale.findData(50.0))
+    assert window._math_fit_pending
+    run_until_triggered(window)
+    # Seno de 2 V vezes quadrada de 1 V: de -2 V² a 2 V², cabe em 6 div a 1 V²/div.
+    assert window._math_scale.currentData() == 1.0
+    assert not window._math_fit_pending

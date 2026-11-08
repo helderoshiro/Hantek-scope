@@ -10,14 +10,15 @@ def write_csv(
     header: list[str],
     excel_ptbr: bool = False,
 ) -> None:
-    """Grava tempo e tensões, com o cabeçalho em linhas iniciadas por '#'.
+    """Grava o tempo e uma coluna por item de columns, que leva o nome da
+    coluna já com a unidade. O cabeçalho vai em linhas iniciadas por '#'.
 
     No formato do Excel em português, as colunas são separadas por ';', a
     vírgula é o separador decimal e o arquivo leva BOM, sem o qual o Excel
     lê acentos e "µ" errado.
     """
     separator = ";" if excel_ptbr else ","
-    names = ["tempo_s", *(f"{name}_V" for name in channels)]
+    names = ["tempo_s", *channels]
     columns = [time_s, *channels.values()]
     formats = ["{:.9g}"] + ["{:.6g}"] * len(channels)
 

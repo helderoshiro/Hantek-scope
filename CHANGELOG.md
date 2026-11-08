@@ -5,6 +5,23 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+### Adicionado
+
+- Seleção da ponteira (1x ou 10x) por canal, com correção de escalas,
+  medições, cursores, trigger e dados salvos.
+- Posição vertical por canal, com marca do 0 V na borda esquerda.
+- Acoplamento AC por software, com a faixa de entrada escolhida pelo sinal
+  completo para o nível contínuo não saturar o conversor.
+- Inversão de canal.
+- Filtro de 60 Hz (e harmônicas até 180 Hz) por canal, ativo a partir de 2 ms/div.
+- Traço MATH com soma, diferença, produto e divisão entre os canais, com escala
+  e posição próprias, ajuste automático da escala, medições, cursores e CSV.
+
+### Alterado
+
+- O CSV registra ponteira, acoplamento, inversão e filtro de cada canal, e as
+  tensões passam a ser as da ponta da ponteira.
+
 ## [0.3.0] - 2026-11-08
 
 ### Adicionado

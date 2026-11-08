@@ -29,6 +29,7 @@ simulador. A fonte em uso aparece no painel lateral e na barra de status.
 | Arrastar a linha "T" vertical | Muda a posição do disparo na tela |
 | Arrastar um cursor (T1, V1...) | Move o cursor; crie-os com "+ Tempo" e "+ Tensão" |
 | Clique direito em um cursor | Remove o cursor |
+| "Posição" do canal | Desloca o traço; a marca à esquerda (1▶, 2▶, M▶) indica o 0 V |
 
 O eixo de tempo mostra o tempo a partir do disparo. O eixo esquerdo usa a escala
 do CH1 e o direito, a do CH2. A posição do mouse aparece no canto da barra de
@@ -42,6 +43,28 @@ a pico, para o ruído de um canal sem sinal não virar frequência.
 PNG com as escalas no rodapé. "Salvar dados" grava em CSV as amostras visíveis,
 com o tempo a partir do disparo; escolha o formato "Excel em português" para
 abrir direto no Excel com vírgula decimal.
+
+### Canais
+
+- **Ponteira 1x/10x:** corrige escalas, medições, cursores, trigger e CSV para a
+  tensão na ponta da ponteira. Ajuste a chave da ponteira para o mesmo valor.
+- **Acoplamento AC:** remove o nível contínuo no software. Como o contínuo ainda
+  passa pelo conversor, nesse modo a faixa de entrada do aparelho é escolhida
+  pelo sinal completo, e não pela escala da tela. Um contínuo acima da faixa
+  máxima (5 V na entrada, 50 V com ponteira 10x) satura o conversor.
+- **Inverter:** mostra o canal com o sinal trocado.
+- **Filtro 60 Hz:** remove a interferência da rede e suas harmônicas (120 e
+  180 Hz). Precisa de pelo menos dois ciclos da rede na captura, ou seja, de
+  2 ms/div ou mais; abaixo disso fica inativo e o painel avisa. Um sinal
+  legítimo nessas frequências também é removido.
+
+### Matemática
+
+O traço MATH (verde) mostra CH1 + CH2, CH1 − CH2, CH1 × CH2 ou CH1 ÷ CH2, com
+escala e posição próprias. Ao escolher a operação, a escala se ajusta ao sinal;
+o botão "Ajustar escala" refaz o ajuste. Na divisão, os pontos em que o CH2 está
+muito perto de zero ficam em branco. O MATH aparece nas medições, pode receber os
+cursores de tensão e vai para o CSV.
 
 ## Driver do 6022BL no Windows
 
@@ -76,8 +99,9 @@ instalado, o programa original da Hantek não funciona com o aparelho.
 
 ## Roteiro
 
-- Taxas maiores com um canal só e tempos por divisão mais lentos
-- FFT, Lissajous (XY), filtros e operações entre canais
+- FFT e Lissajous (XY)
+- Média de capturas, autoset e mais medições (ciclo de trabalho, subida, fase)
+- Taxas maiores com um canal só, tempos por divisão mais lentos e modo roll
 - Analisador lógico
 
 As mudanças de cada versão ficam no [CHANGELOG](CHANGELOG.md).
