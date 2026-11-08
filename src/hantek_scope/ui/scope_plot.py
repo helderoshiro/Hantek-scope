@@ -13,19 +13,41 @@ CURSOR_COLOR = "#e0e0e0"
 OVERLAY_MARGIN = (60, 8)  # Distância das leituras até a borda do gráfico.
 
 
+class _DragViewBox(pg.ViewBox):
+    """Arrastar o fundo do gráfico com o botão esquerdo desloca na horizontal.
+
+    Linhas e cursores recebem o arrasto antes, quando estão sob o mouse.
+    """
+
+    def __init__(self, on_drag) -> None:
+        super().__init__()
+        self._on_drag = on_drag
+
+    def mouseDragEvent(self, event, axis=None) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            event.ignore()
+            return
+        event.accept()
+        before = self.mapSceneToView(event.lastScenePos()).x()
+        after = self.mapSceneToView(event.scenePos()).x()
+        self._on_drag(after - before)
+
+
 class ScopePlot(pg.PlotWidget):
     """Tela do osciloscópio, com coordenadas em divisões.
 
     O eixo esquerdo mostra a escala do CH1 e o direito, a do CH2.
     """
 
-    wheel_scrolled = Signal(int, object)  # Passos (positivo = aproximar), modificadores.
+    # Passos (positivo = aproximar), modificadores e posição x do mouse, em divisões.
+    wheel_scrolled = Signal(int, object, float)
+    dragged = Signal(float)  # Deslocamento horizontal, em divisões.
     mouse_moved = Signal(float, float)  # Posição em divisões.
     mouse_left = Signal()
     cursor_remove_requested = Signal(object)
 
     def __init__(self, channel_colors: tuple[str, ...]) -> None:
-        super().__init__(background=BACKGROUND)
+        super().__init__(background=BACKGROUND, viewBox=_DragViewBox(lambda dx: self.dragged.emit(dx)))
         self.setMenuEnabled(False)
         self.setMouseEnabled(x=False, y=False)
         self.hideButtons()
@@ -38,6 +60,11 @@ class ScopePlot(pg.PlotWidget):
 
         self.trigger_position = self._line(90, HORIZONTAL_DIVS / 2, "T", MARKER_COLOR, 0.97)
         self.trigger_level = self._line(0, 0, "T", channel_colors[0], 0.02)
+        # Com o disparo fora da tela, a linha some e esta seta aponta para ele.
+        self._trigger_arrow = pg.TextItem(color=MARKER_COLOR)
+        self._trigger_arrow.setZValue(10)
+        self.addItem(self._trigger_arrow, ignoreBounds=True)
+        self._trigger_arrow.hide()
         self.time_cursors: list[pg.InfiniteLine] = []
         self.volt_cursors: list[pg.InfiniteLine] = []
         self._zero_markers: dict[str, pg.TextItem] = {}
@@ -64,6 +91,24 @@ class ScopePlot(pg.PlotWidget):
     def set_line_color(self, line: pg.InfiniteLine, color: str) -> None:
         line.setPen(pg.mkPen(color, width=1, style=Qt.PenStyle.DashLine))
         line.label.setColor(color)
+
+    def set_trigger_x(self, x_divs: float, offscreen_text: str = "") -> None:
+        """Põe a linha do disparo em x; fora da tela, mostra uma seta na borda."""
+        on_screen = 0 <= x_divs <= HORIZONTAL_DIVS
+        self.trigger_position.setVisible(on_screen)
+        self._trigger_arrow.setVisible(not on_screen)
+        if on_screen:
+            self.trigger_position.blockSignals(True)
+            self.trigger_position.setValue(x_divs)
+            self.trigger_position.blockSignals(False)
+        elif x_divs < 0:
+            self._trigger_arrow.setText(f"◀ T {offscreen_text}")
+            self._trigger_arrow.setAnchor((0, 0))
+            self._trigger_arrow.setPos(0, HALF_DIVS)
+        else:
+            self._trigger_arrow.setText(f"{offscreen_text} T ▶")
+            self._trigger_arrow.setAnchor((1, 0))
+            self._trigger_arrow.setPos(HORIZONTAL_DIVS, HALF_DIVS)
 
     def set_zero_marker(self, name: str, y_divs: float | None, color: str) -> None:
         """Marca, na borda esquerda, onde fica o 0 V do traço; None oculta.
@@ -119,7 +164,9 @@ class ScopePlot(pg.PlotWidget):
                 steps = int(self._wheel_accumulated / WHEEL_STEP)
                 if steps:
                     self._wheel_accumulated -= steps * WHEEL_STEP
-                    self.wheel_scrolled.emit(steps, event.modifiers())
+                    scene_pos = self.mapToScene(event.position().toPoint())
+                    x = self.getViewBox().mapSceneToView(scene_pos).x()
+                    self.wheel_scrolled.emit(steps, event.modifiers(), x)
                 return True
             if event.type() == QEvent.Type.Leave:
                 self.mouse_left.emit()

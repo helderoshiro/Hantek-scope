@@ -567,3 +567,58 @@ def test_math_turned_on_before_running_fits_on_the_first_frame(qapp):
     # Seno de 2 V vezes quadrada de 1 V: de -2 V² a 2 V², cabe em 6 div a 1 V²/div.
     assert window._math_scale.currentData() == 1.0
     assert not window._math_fit_pending
+
+
+# Zoom no mouse e deslocamento horizontal
+
+
+def test_wheel_zoom_keeps_the_instant_under_the_mouse(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    assert window._time_at(8) == pytest.approx(600e-6)
+    window._on_wheel(1, Qt.KeyboardModifier.NoModifier, 8.0)
+    assert window._tdiv() == pytest.approx(100e-6)
+    assert window._time_at(8) == pytest.approx(600e-6)
+    assert window._trigger_x == pytest.approx(2.0)
+
+
+def test_zooming_far_from_the_trigger_moves_it_off_screen(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._on_wheel(5, Qt.KeyboardModifier.NoModifier, 9.0)  # 200 µs -> 2 µs/div.
+    assert window._time_at(9) == pytest.approx(800e-6)
+    assert window._trigger_x < 0
+    assert not window._plot.trigger_position.isVisible()
+    assert window._plot._trigger_arrow.isVisible()
+    # A captura cobre o trecho entre o disparo e a tela.
+    config = window._current_config()
+    assert config.n_samples / config.sample_rate >= 800e-6 + 10 * 2e-6
+    window._on_wheel(-5, Qt.KeyboardModifier.NoModifier, 9.0)
+    assert window._trigger_x == pytest.approx(5.0)
+    assert window._plot.trigger_position.isVisible()
+
+
+def test_dragging_the_background_pans_and_the_button_recenters(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._plot.dragged.emit(1.5)
+    assert window._trigger_x == pytest.approx(6.5)
+    assert window._plot.trigger_position.value() == pytest.approx(6.5)
+    assert dict(window._plot.getAxis("bottom")._tickLevels[0])[0] == "-1.3 ms"
+    window._set_trigger_x(5.0)
+    assert window._trigger_x == 5.0
+
+
+def test_trigger_offset_is_limited_by_the_capture_memory(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._set_trigger_x(-1e9)
+    config = window._current_config()
+    assert config.n_samples <= 100_001
+
+
+def test_off_screen_trigger_shows_the_waveform_after_it(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._time_per_div.setCurrentIndex(window._time_per_div.findData(100e-6))
+    # Disparo 10 divisões (1 ms, um período do CH1) antes da borda esquerda.
+    window._set_trigger_x(-10)
+    run_until_triggered(window)
+    curve = window._curves[0]
+    assert trace_value_at(curve, 0.05) == pytest.approx(0, abs=0.15)
+    assert trace_value_at(curve, 0.5) > trace_value_at(curve, 0.05)

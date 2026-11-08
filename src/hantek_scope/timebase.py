@@ -17,13 +17,28 @@ TIME_PER_DIV = (
 )  # fmt: skip
 
 
+def max_offscreen_divs(time_per_div: float, sample_rates: Iterable[float]) -> float:
+    """Quantas divisões o disparo pode ficar fora da tela.
+
+    A captura precisa cobrir também o trecho entre o disparo e a tela, e o
+    limite é o que cabe em MAX_SAMPLES na menor taxa.
+    """
+    longest_s = MAX_SAMPLES / min(sample_rates)
+    return max(0.0, longest_s / time_per_div - CAPTURE_DIVS)
+
+
 def capture_for(
     time_per_div: float,
     sample_rates: Iterable[float],
     volts_per_div: tuple[float, ...] = (),
+    offscreen_divs: float = 0.0,
 ) -> CaptureConfig:
-    """Usa a maior taxa cuja captura completa cabe em MAX_SAMPLES."""
-    window_s = CAPTURE_DIVS * time_per_div
+    """Usa a maior taxa cuja captura completa cabe em MAX_SAMPLES.
+
+    offscreen_divs é a distância do disparo até a tela, quando ele está fora
+    dela; a captura cresce nessa medida.
+    """
+    window_s = (CAPTURE_DIVS + offscreen_divs) * time_per_div
     rates = sorted(sample_rates)
     fitting = [r for r in rates if round(r * window_s, 6) <= MAX_SAMPLES]
     rate = fitting[-1] if fitting else rates[0]

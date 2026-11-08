@@ -48,6 +48,7 @@ from hantek_scope.timebase import (
     TIME_PER_DIV,
     VERTICAL_DIVS,
     capture_for,
+    max_offscreen_divs,
 )
 from hantek_scope.ui.scope_plot import BACKGROUND, CURSOR_COLOR, ScopePlot
 from hantek_scope.ui.worker import AcquisitionWorker
@@ -223,6 +224,8 @@ class MainWindow(QMainWindow):
         self._trigger_at: float | None = None  # Amostra do disparo em _last_frame.
         self._frame_times: deque[float] = deque(maxlen=30)
         self._syncing_trigger_line = False
+        # Posição do disparo na tela, em divisões; pode ficar fora dela (zoom ou arrasto).
+        self._trigger_x = HORIZONTAL_DIVS / 2
         # Volts/div de entrada escolhidos pelo sinal, nos canais em AC.
         self._ac_input_vdiv: list[float | None] = [None] * self._backend.n_channels
 
@@ -230,7 +233,9 @@ class MainWindow(QMainWindow):
 
         self._plot = ScopePlot(CHANNEL_COLORS)
         self._plot.setToolTip(
-            "Roda do mouse: tempo/div\nCtrl + roda: volts/div do CH1\nShift + roda: volts/div do CH2\n"
+            "Roda do mouse: tempo/div, aproximando onde está o mouse\n"
+            "Arrastar o fundo: desloca na horizontal\n"
+            "Ctrl + roda: volts/div do CH1\nShift + roda: volts/div do CH2\n"
             "Clique direito em um cursor: remover"
         )
         self._cursor_readout = self._plot.cursor_readout
@@ -260,6 +265,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._mouse_label)
 
         self._plot.wheel_scrolled.connect(self._on_wheel)
+        self._plot.dragged.connect(lambda dx: self._set_trigger_x(self._trigger_x + dx))
         self._plot.mouse_moved.connect(self._on_mouse_moved)
         self._plot.mouse_left.connect(lambda: self._mouse_label.setText(""))
         self._plot.trigger_position.sigPositionChanged.connect(self._on_trigger_position_changed)
@@ -307,8 +313,14 @@ class MainWindow(QMainWindow):
         self._time_per_div.setCurrentIndex(TIME_PER_DIV.index(DEFAULT_TIME_PER_DIV))
         self._time_per_div.currentIndexChanged.connect(self._on_settings_changed)
 
+        center = QPushButton("Disparo ao centro")
+        center.setToolTip("Volta o ponto do disparo para o meio da tela")
+        center.clicked.connect(lambda: self._set_trigger_x(HORIZONTAL_DIVS / 2))
+
         timebase = QGroupBox("Horizontal")
-        QFormLayout(timebase).addRow("Tempo/div", self._time_per_div)
+        timebase_form = QFormLayout(timebase)
+        timebase_form.addRow("Tempo/div", self._time_per_div)
+        timebase_form.addRow(center)
 
         self._channels = []
         for i in range(self._backend.n_channels):
@@ -460,7 +472,11 @@ class MainWindow(QMainWindow):
             self._tdiv(),
             self._backend.sample_rates,
             tuple(self._input_vdiv(i) for i in range(len(self._channels))),
+            offscreen_divs=self._offscreen_divs(),
         )
+
+    def _offscreen_divs(self) -> float:
+        return max(0.0, -self._trigger_x, self._trigger_x - HORIZONTAL_DIVS)
 
     def _input_vdiv(self, channel: int) -> float:
         """Volts/div que definem a faixa de entrada do aparelho."""
@@ -563,11 +579,11 @@ class MainWindow(QMainWindow):
     def _find_trigger(self, sample_rate: float, traces: list[np.ndarray]) -> float | None:
         source = self._trigger_source.currentData()
         samples_per_div = sample_rate * self._tdiv()
-        position = self._plot.trigger_position.value()
+        position = self._trigger_x
         n_samples = traces[source].size
         # O disparo precisa de dados suficientes antes e depois para encher a tela.
-        start = math.ceil(position * samples_per_div)
-        stop = n_samples - math.ceil((HORIZONTAL_DIVS - position) * samples_per_div)
+        start = max(0, math.ceil(position * samples_per_div))
+        stop = min(n_samples, n_samples - math.ceil((HORIZONTAL_DIVS - position) * samples_per_div))
         return find_trigger(
             traces[source],
             level=self._trigger_level.value(),
@@ -683,9 +699,12 @@ class MainWindow(QMainWindow):
 
     def _time_at(self, x_divs: float) -> float:
         """Tempo relativo ao ponto de disparo."""
-        return (x_divs - self._plot.trigger_position.value()) * self._tdiv()
+        return (x_divs - self._trigger_x) * self._tdiv()
 
     def _on_settings_changed(self) -> None:
+        limit = max_offscreen_divs(self._tdiv(), self._backend.sample_rates)
+        self._trigger_x = max(-limit, min(HORIZONTAL_DIVS + limit, self._trigger_x))
+        self._plot.set_trigger_x(self._trigger_x)
         for i, channel in enumerate(self._channels):
             if not channel.is_ac():
                 self._ac_input_vdiv[i] = None
@@ -727,7 +746,12 @@ class MainWindow(QMainWindow):
             y = self._trace_offset(i) if self._trace_on(i) else None
             self._plot.set_zero_marker(name, y, self._trace_color(i))
 
+    def _set_trigger_x(self, x_divs: float) -> None:
+        self._trigger_x = x_divs
+        self._on_settings_changed()
+
     def _on_trigger_position_changed(self) -> None:
+        self._trigger_x = self._plot.trigger_position.value()
         self._update_axes()
         self._update_cursor_readout()
         self._redraw()
@@ -948,15 +972,27 @@ class MainWindow(QMainWindow):
 
     # Mouse
 
-    def _on_wheel(self, steps: int, modifiers) -> None:
+    def _on_wheel(self, steps: int, modifiers, x_divs: float | None = None) -> None:
         if modifiers & Qt.KeyboardModifier.ControlModifier:
             combo = self._channels[0].volts_per_div
         elif modifiers & Qt.KeyboardModifier.ShiftModifier and len(self._channels) > 1:
             combo = self._channels[1].volts_per_div
         else:
-            combo = self._time_per_div
+            self._zoom_time(steps, x_divs)
+            return
         # Rolar para cima aproxima, ou seja, escolhe uma escala menor.
         combo.setCurrentIndex(max(0, min(combo.count() - 1, combo.currentIndex() - steps)))
+
+    def _zoom_time(self, steps: int, x_divs: float | None) -> None:
+        """Muda o tempo/div mantendo parado o instante sob o mouse."""
+        combo = self._time_per_div
+        index = max(0, min(combo.count() - 1, combo.currentIndex() - steps))
+        if index == combo.currentIndex():
+            return
+        anchor = self._trigger_x if x_divs is None else x_divs
+        ratio = self._tdiv() / combo.itemData(index)
+        self._trigger_x = anchor - (anchor - self._trigger_x) * ratio
+        combo.setCurrentIndex(index)
 
     def _on_mouse_moved(self, x_divs: float, y_divs: float) -> None:
         self._mouse_label.setText(self._position_text(x_divs, y_divs))
@@ -977,7 +1013,7 @@ class MainWindow(QMainWindow):
         index = np.arange(frame.channels.shape[1])
         if self._trigger_at is None:
             return index / samples_per_div
-        return (index - self._trigger_at) / samples_per_div + self._plot.trigger_position.value()
+        return (index - self._trigger_at) / samples_per_div + self._trigger_x
 
     def _visible_samples(self, frame: Frame) -> np.ndarray:
         x = self._display_x(frame)
