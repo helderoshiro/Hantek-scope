@@ -18,6 +18,21 @@ py -3.12 -m venv .venv
 Se o 6022BL estiver conectado, o programa o usa; caso contrário, abre no
 simulador. A fonte em uso aparece no painel lateral e na barra de status.
 
+## Uso
+
+| Ação | Resultado |
+|---|---|
+| Roda do mouse sobre o gráfico | Muda o tempo/div |
+| Ctrl + roda | Muda os volts/div do CH1 |
+| Shift + roda | Muda os volts/div do CH2 |
+| Arrastar a linha "T" horizontal | Muda o nível do trigger |
+| Arrastar a linha "T" vertical | Muda a posição do disparo na tela |
+| Arrastar T1, T2, V1 e V2 | Move os cursores (ative-os no painel) |
+
+O eixo de tempo mostra o tempo a partir do disparo. O eixo esquerdo usa a escala
+do CH1 e o direito, a do CH2. A posição do mouse aparece no canto da barra de
+status.
+
 ## Driver do 6022BL no Windows
 
 Coloque a chave do aparelho em **H** (osciloscópio). Na posição P, ele pode se
@@ -52,7 +67,7 @@ instalado, o programa original da Hantek não funciona com o aparelho.
 ## Roteiro
 
 - Taxas maiores com um canal só e tempos por divisão mais lentos
-- Trigger, cursores e medições
+- Medições automáticas (frequência, Vpp, RMS...)
 - FFT, Lissajous (XY), filtros e operações entre canais
 - Exportação de dados
 - Analisador lógico

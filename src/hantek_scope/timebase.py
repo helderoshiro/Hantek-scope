@@ -5,6 +5,8 @@ from hantek_scope.acquisition.base import CaptureConfig
 
 HORIZONTAL_DIVS = 10
 VERTICAL_DIVS = 8
+# Captura o dobro da tela para o trigger achar a borda e ainda encher a tela.
+CAPTURE_DIVS = 2 * HORIZONTAL_DIVS
 MAX_SAMPLES = 100_000
 TIME_PER_DIV = (
     1e-6, 2e-6, 5e-6,
@@ -20,11 +22,11 @@ def capture_for(
     sample_rates: Iterable[float],
     volts_per_div: tuple[float, ...] = (),
 ) -> CaptureConfig:
-    """Usa a maior taxa cuja janela completa cabe em MAX_SAMPLES."""
-    window_s = HORIZONTAL_DIVS * time_per_div
+    """Usa a maior taxa cuja captura completa cabe em MAX_SAMPLES."""
+    window_s = CAPTURE_DIVS * time_per_div
     rates = sorted(sample_rates)
     fitting = [r for r in rates if round(r * window_s, 6) <= MAX_SAMPLES]
     rate = fitting[-1] if fitting else rates[0]
-    # A amostra extra faz o traço alcançar a borda direita da tela.
+    # A amostra extra faz a captura cobrir a janela inteira.
     n_samples = math.ceil(round(rate * window_s, 6)) + 1
     return CaptureConfig(sample_rate=rate, n_samples=n_samples, volts_per_div=volts_per_div)

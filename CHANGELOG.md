@@ -5,6 +5,22 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+### Adicionado
+
+- Trigger por borda (subida ou descida), com modos Auto, Normal e Único,
+  histerese contra ruído e alinhamento com precisão menor que uma amostra.
+  O nível e a posição do disparo podem ser arrastados no gráfico.
+- Escalas de tempo (relativo ao disparo) e de tensão nos eixos, uma por canal.
+- Cursores de tempo (ΔT e 1/ΔT) e de tensão (ΔV), com leitura sobre o gráfico.
+- Posição do mouse em tempo e tensão na barra de status.
+- Roda do mouse muda o tempo/div; com Ctrl, os volts/div do CH1; com Shift, os
+  do CH2.
+
+### Alterado
+
+- A captura cobre o dobro da tela, para o trigger achar a borda. Nas escalas
+  mais lentas, a taxa de amostragem cai pela metade.
+
 ## [0.1.0] - 2026-11-08
 
 ### Adicionado

@@ -6,7 +6,7 @@ import numpy as np
 
 from hantek_scope.acquisition.base import CaptureConfig, Frame
 
-SAMPLE_RATES = (1e6, 4e6, 8e6, 16e6, 24e6, 48e6)
+SAMPLE_RATES = (100e3, 200e3, 500e3, 1e6, 4e6, 8e6, 16e6, 24e6, 48e6)
 FULL_SCALE_V = 5.0
 ADC_LEVELS = 256
 
