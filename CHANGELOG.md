@@ -5,6 +5,20 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+### Adicionado
+
+- Medições automáticas por canal sobre o gráfico: frequência, período, Vpp,
+  Vmín, Vmáx, Vméd e RMS, calculadas na parte visível da tela.
+- Botão para pausar a tela sem parar a aquisição.
+- Salvar a tela como PNG, com rodapé de escalas e data.
+- Salvar os dados da tela em CSV, no formato padrão ou no do Excel em português.
+- Até 6 cursores de tempo e 6 de tensão, com diferença em relação ao primeiro;
+  clique direito em um cursor o remove.
+
+### Alterado
+
+- Cursores passam a ser adicionados por botões, em vez das caixas de seleção.
+
 ## [0.2.0] - 2026-11-08
 
 ### Adicionado

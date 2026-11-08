@@ -15,7 +15,8 @@ Objetivo: uso geral, com interface mais amigável e fluida que as alternativas.
   (`base.py`). Não pode depender de Qt.
 - `src/hantek_scope/timebase.py`: converte tempo por divisão em configuração de
   captura.
-- `src/hantek_scope/processing/`: análise sem Qt (por enquanto, `trigger.py`).
+- `src/hantek_scope/processing/`: análise sem Qt (`trigger.py`, `measurements.py`).
+- `src/hantek_scope/export.py`: gravação de CSV, sem Qt.
 - `src/hantek_scope/ui/`: interface; `scope_plot.py` é o gráfico (eixos, cursores,
   linhas do trigger, roda e posição do mouse) e `worker.py`, a thread de aquisição.
 

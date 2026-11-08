@@ -27,11 +27,21 @@ simulador. A fonte em uso aparece no painel lateral e na barra de status.
 | Shift + roda | Muda os volts/div do CH2 |
 | Arrastar a linha "T" horizontal | Muda o nível do trigger |
 | Arrastar a linha "T" vertical | Muda a posição do disparo na tela |
-| Arrastar T1, T2, V1 e V2 | Move os cursores (ative-os no painel) |
+| Arrastar um cursor (T1, V1...) | Move o cursor; crie-os com "+ Tempo" e "+ Tensão" |
+| Clique direito em um cursor | Remove o cursor |
 
 O eixo de tempo mostra o tempo a partir do disparo. O eixo esquerdo usa a escala
 do CH1 e o direito, a do CH2. A posição do mouse aparece no canto da barra de
 status.
+
+As medições automáticas aparecem embaixo do gráfico e usam só a parte visível
+da tela. A frequência só é mostrada quando o sinal passa de 0,2 divisão de pico
+a pico, para o ruído de um canal sem sinal não virar frequência.
+
+"Pausar tela" congela a imagem sem parar a aquisição. "Salvar imagem" grava um
+PNG com as escalas no rodapé. "Salvar dados" grava em CSV as amostras visíveis,
+com o tempo a partir do disparo; escolha o formato "Excel em português" para
+abrir direto no Excel com vírgula decimal.
 
 ## Driver do 6022BL no Windows
 
@@ -67,7 +77,6 @@ instalado, o programa original da Hantek não funciona com o aparelho.
 ## Roteiro
 
 - Taxas maiores com um canal só e tempos por divisão mais lentos
-- Medições automáticas (frequência, Vpp, RMS...)
 - FFT, Lissajous (XY), filtros e operações entre canais
 - Exportação de dados
 - Analisador lógico

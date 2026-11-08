@@ -1,7 +1,9 @@
+import re
+
 import numpy as np
 import pytest
 from PySide6.QtCore import QPoint, QPointF, Qt
-from PySide6.QtGui import QWheelEvent
+from PySide6.QtGui import QImage, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication
 
@@ -33,6 +35,8 @@ def wait_until(predicate, timeout_ms=3000):
         (1.0, "V", "1 V"),
         (-0.2, "V", "-200 mV"),
         (0.0, "s", "0 s"),
+        (999.97, "Hz", "1 kHz"),
+        (999.94e-6, "s", "999.9 µs"),
     ],
 )
 def test_format_si(value, unit, expected):
@@ -202,26 +206,152 @@ def test_disabled_channel_hides_its_axis_values(qapp):
     assert right[2] == ""
 
 
-def test_time_cursors_report_period_and_frequency(qapp):
+def test_time_cursors_report_difference_to_the_first(qapp):
     window = MainWindow([SimulatedScope(seed=1)])
-    window._time_cursors_on.setChecked(True)
-    window._plot.time_cursors[0].setValue(3)
-    window._plot.time_cursors[1].setValue(8)
-    text = window._cursor_readout.text()
-    assert "ΔT   1 ms" in text
-    assert "1/ΔT 1 kHz" in text
-    assert window._plot.time_cursors[0].isVisible()
+    for _ in range(3):
+        window._add_cursor(vertical=True)
+    t1, t2, t3 = window._plot.time_cursors
+    t1.setValue(5)  # 0 s, no ponto do disparo.
+    t2.setValue(10)  # 1 ms
+    t3.setValue(6)  # 200 µs
+    lines = window._cursor_readout.text().splitlines()
+    assert lines[0].split() == ["T1", "0", "s"]
+    assert lines[1].split()[4:] == ["1", "ms", "1/ΔT1", "1", "kHz"]
+    assert lines[2].split()[4:] == ["200", "µs", "1/ΔT1", "5", "kHz"]
+    assert window._cursor_readout.isVisibleTo(window._plot)
 
 
 def test_volt_cursors_use_the_selected_channel_scale(qapp):
     window = MainWindow([SimulatedScope(seed=1)])
     combo = window._channels[1].volts_per_div
     combo.setCurrentIndex(combo.findData(0.5))
-    window._volt_cursors_on.setChecked(True)
     window._cursor_channel.setCurrentIndex(1)
+    window._add_cursor(vertical=False)
+    window._add_cursor(vertical=False)
     window._plot.volt_cursors[0].setValue(2)
     window._plot.volt_cursors[1].setValue(-1)
-    assert "ΔV   1.5 V" in window._cursor_readout.text()
+    lines = window._cursor_readout.text().splitlines()
+    assert lines[0].split() == ["V1", "1", "V"]
+    assert lines[1].split() == ["V2", "-500", "mV", "ΔV1", "-1.5", "V"]
+    assert lines[2] == "(tensão do CH2)"
+
+
+def test_removing_a_cursor_renumbers_the_rest(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    for _ in range(3):
+        window._add_cursor(vertical=True)
+    middle = window._plot.time_cursors[1]
+    window._plot.cursor_remove_requested.emit(middle)
+    assert len(window._plot.time_cursors) == 2
+    assert [line.label.format for line in window._plot.time_cursors] == ["T1", "T2"]
+    assert middle not in window._plot.items()
+
+
+def test_cursor_count_is_limited(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    for _ in range(10):
+        window._add_cursor(vertical=False)
+    assert len(window._plot.volt_cursors) == 6
+    assert not window._add_volt_cursor.isEnabled()
+    window._clear_cursors()
+    assert window._plot.volt_cursors == []
+    assert window._add_volt_cursor.isEnabled()
+    assert not window._cursor_readout.isVisibleTo(window._plot)
+
+
+def measured(row, name, unit):
+    """Lê um valor da linha de medições, como 'f 1 kHz', em unidades base."""
+    match = re.search(rf"{name} (-?[\d.]+) ([kmµ]?){unit}", row)
+    prefix = {"": 1, "k": 1e3, "m": 1e-3, "µ": 1e-6}[match.group(2)]
+    return float(match.group(1)) * prefix
+
+
+def run_until_triggered(window):
+    window.start()
+    try:
+        assert wait_until(lambda: window._trigger_at is not None)
+    finally:
+        window.stop()
+
+
+def test_measurements_show_frequency_and_levels(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    run_until_triggered(window)
+    ch1, ch2 = window._measurement_readout.text().split("<br>")
+    # CH1: seno de 1 kHz e 2 V; CH2: quadrada de 2,5 kHz e ±1 V.
+    assert measured(ch1, "f", "Hz") == pytest.approx(1e3, rel=1e-3)
+    assert measured(ch1, "T", "s") == pytest.approx(1e-3, rel=1e-3)
+    assert measured(ch1, "RMS", "V") == pytest.approx(2 / np.sqrt(2), rel=0.02)
+    assert measured(ch2, "f", "Hz") == pytest.approx(2.5e3, rel=1e-3)
+    assert measured(ch2, "Vpp", "V") == pytest.approx(2, abs=0.15)
+
+
+def test_measurements_can_be_hidden(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    run_until_triggered(window)
+    assert window._measurement_readout.isVisibleTo(window._plot)
+    window._measurements_on.setChecked(False)
+    assert not window._measurement_readout.isVisibleTo(window._plot)
+
+
+def test_pause_freezes_the_screen_while_acquiring(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    assert not window._pause_button.isEnabled()
+    window.start()
+    try:
+        assert wait_until(lambda: window._last_frame is not None)
+        window._pause_button.setChecked(True)
+        frozen = window._last_frame
+        QTest.qWait(300)
+        assert window._last_frame is frozen
+        assert window._worker is not None
+        window._pause_button.setChecked(False)
+        assert wait_until(lambda: window._last_frame is not frozen)
+    finally:
+        window.stop()
+    assert not window._pause_button.isChecked()
+    assert not window._pause_button.isEnabled()
+
+
+def test_save_image_adds_a_footer(qapp, tmp_path):
+    window = MainWindow([SimulatedScope(seed=1)])
+    run_until_triggered(window)
+    path = tmp_path / "tela.png"
+    window.save_image(path)
+    image = QImage(str(path))
+    assert not image.isNull()
+    assert image.height() == window._plot.height() + 26
+
+
+def test_save_data_writes_the_visible_window(qapp, tmp_path):
+    window = MainWindow([SimulatedScope(seed=1)])
+    run_until_triggered(window)
+    path = tmp_path / "dados.csv"
+    window.save_data(path)
+    lines = path.read_text(encoding="utf-8").splitlines()
+    header = [line for line in lines if line.startswith("#")]
+    assert any("disparado: sim" in line for line in header)
+    assert lines[len(header)] == "tempo_s,CH1_V,CH2_V"
+    values = np.array([[float(v) for v in line.split(",")] for line in lines[len(header) + 1 :]])
+    # A 200 µs/div, a tela vai de -1 ms a +1 ms em torno do disparo.
+    assert values[0, 0] == pytest.approx(-1e-3, abs=1e-6)
+    assert values[-1, 0] == pytest.approx(1e-3, abs=1e-6)
+    assert values[:, 1].max() == pytest.approx(2, abs=0.1)
+
+
+def test_save_data_for_excel_in_portuguese(qapp, tmp_path):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._channels[1].enabled.setChecked(False)
+    run_until_triggered(window)
+    path = tmp_path / "dados.csv"
+    window.save_data(path, excel_ptbr=True)
+    lines = [line for line in path.read_text(encoding="utf-8-sig").splitlines() if not line.startswith("#")]
+    assert lines[0] == "tempo_s;CH1_V"
+    for line in lines[1:20]:
+        time_text, volts_text = line.split(";")
+        assert "." not in time_text + volts_text
+        float(time_text.replace(",", "."))
+        float(volts_text.replace(",", "."))
 
 
 def test_mouse_position_text(qapp):
