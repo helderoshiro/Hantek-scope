@@ -5,6 +5,12 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+### Corrigido
+
+- Sem disparo (modo auto), o arrasto e os botões de deslocamento agora movem o
+  traço, e não só a linha do disparo. O traço sem disparo fica centrado na
+  captura.
+
 ## [0.5.0] - 2026-11-09
 
 ### Adicionado

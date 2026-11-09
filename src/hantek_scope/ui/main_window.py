@@ -251,6 +251,9 @@ class MainWindow(QMainWindow):
         # Ligar o MATH sem quadro na tela adia o "Ajustar escala" para o primeiro.
         self._math_fit_pending = False
         self._trigger_at: float | None = None  # Amostra do disparo em _last_frame.
+        # Amostra de _last_frame que fica na posição do disparo na tela: o próprio
+        # disparo ou, sem ele, o meio da captura. É ela que o arrasto desloca.
+        self._anchor_at: float | None = None
         self._frame_times: deque[float] = deque(maxlen=30)
         self._syncing_trigger_line = False
         # Posição do disparo na tela, em divisões; pode ficar fora dela (zoom ou arrasto).
@@ -700,6 +703,7 @@ class MainWindow(QMainWindow):
         self._traces = []
         self._math = None
         self._trigger_at = None
+        self._anchor_at = None
         self._ac_input_vdiv = [None] * len(self._channels)
         self._clear_display()
         self._update_source_labels()
@@ -712,6 +716,7 @@ class MainWindow(QMainWindow):
         self._traces = []
         self._math = None
         self._trigger_at = None
+        self._anchor_at = None
         self._roll_chunks = []
         self._roll_t = None
         for curve in [*self._curves, self._math_curve]:
@@ -753,6 +758,11 @@ class MainWindow(QMainWindow):
         self._traces = traces
         self._math = self._compute_math(traces)
         self._trigger_at = trigger_at
+        if trigger_at is None:
+            start, stop = self._trigger_window(frame.sample_rate, traces[0].size)
+            self._anchor_at = (start + stop) / 2
+        else:
+            self._anchor_at = trigger_at
         self._frame_times.append(time.monotonic())
         if self._math_fit_pending and self._math is not None:
             self._math_fit_pending = False
@@ -809,6 +819,7 @@ class MainWindow(QMainWindow):
         self._traces = self._process(self._last_frame)
         self._math = self._compute_math(self._traces)
         self._trigger_at = None
+        self._anchor_at = None
         self._frame_times.append(time.monotonic())
         if self._math_fit_pending and self._math is not None:
             self._math_fit_pending = False
@@ -976,12 +987,7 @@ class MainWindow(QMainWindow):
 
     def _find_trigger(self, sample_rate: float, traces: list[np.ndarray]) -> float | None:
         source = self._trigger_source.currentData()
-        samples_per_div = sample_rate * self._tdiv()
-        position = self._trigger_x
-        n_samples = traces[source].size
-        # O disparo precisa de dados suficientes antes e depois para encher a tela.
-        start = max(0, math.ceil(position * samples_per_div))
-        stop = min(n_samples, n_samples - math.ceil((HORIZONTAL_DIVS - position) * samples_per_div))
+        start, stop = self._trigger_window(sample_rate, traces[source].size)
         return find_trigger(
             traces[source],
             level=self._trigger_level.value(),
@@ -990,6 +996,14 @@ class MainWindow(QMainWindow):
             start=start,
             stop=stop,
         )
+
+    def _trigger_window(self, sample_rate: float, n_samples: int) -> tuple[int, int]:
+        """Amostras onde o disparo pode estar e ainda encher a tela."""
+        samples_per_div = sample_rate * self._tdiv()
+        position = self._trigger_x
+        start = max(0, math.ceil(position * samples_per_div))
+        stop = min(n_samples, n_samples - math.ceil((HORIZONTAL_DIVS - position) * samples_per_div))
+        return start, stop
 
     # Processamento
 
@@ -1499,9 +1513,9 @@ class MainWindow(QMainWindow):
             return HORIZONTAL_DIVS - (frame.end_time - self._roll_t) / self._tdiv()
         samples_per_div = frame.sample_rate * self._tdiv()
         index = np.arange(frame.channels.shape[1])
-        if self._trigger_at is None:
+        if self._anchor_at is None:
             return index / samples_per_div
-        return (index - self._trigger_at) / samples_per_div + self._trigger_x
+        return (index - self._anchor_at) / samples_per_div + self._trigger_x
 
     def _visible_samples(self, frame: Frame) -> np.ndarray:
         x = self._display_x(frame)

@@ -995,3 +995,20 @@ def test_middle_button_drag_pans_even_over_a_cursor(qapp):
         assert cursor.value() == 3  # O cursor ficou onde estava.
     finally:
         window.close()
+
+
+def test_pan_moves_the_trace_even_without_trigger(qapp):
+    window = MainWindow([SimulatedScope(seed=1)])
+    window._trigger_level.setValue(50.0)  # Nunca dispara: modo auto.
+    window._backend.open()
+    window._backend.configure(window._current_config())
+    frame = window._backend.read_frame()
+    window._worker = type("W", (), {"take_frame": lambda self: frame})()
+    window._on_frame_ready()
+    window._worker = None
+    assert window._trigger_at is None
+    before = window._display_x(window._last_frame)
+    assert before[0] < 0 < 10 < before[-1]  # Meio da captura na tela.
+    window._on_dragged(-2.0)
+    after = window._display_x(window._last_frame)
+    assert after - before == pytest.approx(np.full_like(before, -2.0))
