@@ -5,6 +5,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+## [0.5.1] - 2026-11-09
+
 ### Corrigido
 
 - Sem disparo (modo auto), o arrasto e os botões de deslocamento agora movem o
