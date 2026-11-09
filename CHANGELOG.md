@@ -5,6 +5,8 @@ as versões seguem o [SemVer](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+## [0.5.0] - 2026-11-09
+
 ### Adicionado
 
 - Zoom pela roda no ponto do mouse e arrasto horizontal do traço. O disparo pode
